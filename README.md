@@ -101,8 +101,11 @@ jobs:
 
 ## Current limitations
 
-- Single-module repos only: `go.mod` must live at the directory `fastci` is
-  invoked from. Multi-module / monorepo support is planned.
+- Run `fastci` from either a Go module root (`go.mod` present) or a Go
+  workspace root (`go.work` present, listing member modules as
+  subdirectories). Cross-module import edges within a workspace are
+  resolved correctly, including test-only edges. `go.work`/`go.work.sum`
+  changes trigger a full run, same as `go.mod`/`go.sum`.
 - Impact analysis is package-level, not function-level, for now (see
   [Roadmap](#roadmap)).
 - Non-Go changes (docs, workflow YAML, etc.) are treated as not affecting

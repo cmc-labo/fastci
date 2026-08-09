@@ -97,3 +97,41 @@ func TestComputeUnresolvedGoFileTriggersFullRun(t *testing.T) {
 		t.Fatal("expected a full run for an unresolvable .go file")
 	}
 }
+
+func loadSampleWorkspaceGraph(t *testing.T) (*depgraph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "sampleworkspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := depgraph.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputeCrossModuleWorkspaceImpact(t *testing.T) {
+	g, dir := loadSampleWorkspaceGraph(t)
+
+	// pkgleaf lives in module wsleaf; pkgconsumer lives in module wsroot
+	// and imports it via the workspace (no replace directive). Changing
+	// pkgleaf must still be attributed across the module boundary.
+	res := impact.Compute(g, []string{filepath.Join(dir, "modleaf", "pkgleaf", "pkgleaf.go")})
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{"wsleaf/pkgleaf", "wsroot/pkgconsumer"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeGoWorkTriggersFullRun(t *testing.T) {
+	g, dir := loadSampleWorkspaceGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "go.work")})
+	if !res.FullRun {
+		t.Fatal("expected a full run when go.work changes")
+	}
+}

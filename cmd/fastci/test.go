@@ -64,8 +64,12 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		return err
 	}
 
-	if _, err := os.Stat(filepath.Join(cwd, "go.mod")); err != nil {
-		return fmt.Errorf("no go.mod in %s: fastci must be run from a Go module root", cwd)
+	// Patterns doubles as our "is this a valid Go module or workspace root"
+	// check: it fails clearly if cwd has neither a go.mod nor an active
+	// go.work.
+	allPatterns, err := depgraph.Patterns(cwd)
+	if err != nil {
+		return err
 	}
 
 	repoRoot, err := gitdiff.RepoRoot(cwd)
@@ -75,7 +79,11 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 
 	if opts.all {
 		fmt.Println("fastci: --all set, running the full test suite")
-		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: []string{"./..."}, ExtraArgs: opts.extraArgs})
+		if opts.dryRun {
+			fmt.Println("fastci: dry-run, not executing go test")
+			return nil
+		}
+		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: allPatterns, ExtraArgs: opts.extraArgs})
 	}
 
 	changed, err := gitdiff.ChangedFiles(repoRoot, opts.base)
@@ -110,7 +118,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 			fmt.Println("fastci: dry-run, not executing go test")
 			return nil
 		}
-		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: []string{"./..."}, ExtraArgs: opts.extraArgs})
+		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: allPatterns, ExtraArgs: opts.extraArgs})
 	}
 
 	if len(result.Targets) == 0 {

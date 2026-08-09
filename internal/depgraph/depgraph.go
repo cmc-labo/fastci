@@ -10,8 +10,12 @@
 package depgraph
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -26,9 +30,12 @@ type Node struct {
 	Imports      map[string]bool // import paths of other Nodes this one depends on
 }
 
-// Graph is the full dependency graph for a module.
+// Graph is the full dependency graph for a module (or, in workspace mode,
+// every module listed in go.work).
 type Graph struct {
-	ModulePath string
+	// ModulePaths is the sorted set of main module paths the graph was
+	// built from - one entry for a plain module, several in workspace mode.
+	ModulePaths []string
 	// Nodes maps import path -> Node.
 	Nodes map[string]*Node
 	// Importers maps import path -> import paths of Nodes that directly
@@ -42,16 +49,21 @@ type Graph struct {
 	dirToTargets map[string][]string
 }
 
-// Load builds the dependency graph for the Go module rooted at dir by
-// invoking `go list` (via golang.org/x/tools/go/packages) over ./....
+// Load builds the dependency graph for the Go module (or workspace) rooted
+// at dir by invoking `go list` (via golang.org/x/tools/go/packages).
 func Load(dir string) (*Graph, error) {
+	patterns, err := Patterns(dir)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports |
 			packages.NeedDeps | packages.NeedModule,
 		Dir:   dir,
 		Tests: true,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("depgraph: loading packages: %w", err)
 	}
@@ -84,11 +96,9 @@ func Load(dir string) (*Graph, error) {
 
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if p.Module == nil || !p.Module.Main {
-			return // stdlib or third-party dependency: not part of the module under test
+			return // stdlib or third-party dependency: not part of the module(s) under test
 		}
-		if g.ModulePath == "" {
-			g.ModulePath = p.Module.Path
-		}
+		g.ModulePaths = appendUnique(g.ModulePaths, p.Module.Path)
 		if isTestBinaryMain(p) {
 			return // synthetic "foo.test" main package; the real target is visited separately
 		}
@@ -127,8 +137,97 @@ func Load(dir string) (*Graph, error) {
 			g.Importers[imp] = appendUnique(g.Importers[imp], path)
 		}
 	}
+	sort.Strings(g.ModulePaths)
 
 	return g, nil
+}
+
+// Patterns returns the `go list`-style package patterns that cover every
+// package rooted at dir: "./..." for a plain module, or one "<reldir>/..."
+// pattern per member module when dir is a workspace root (a directory with
+// a go.work but no go.mod of its own).
+func Patterns(dir string) ([]string, error) {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return []string{"./..."}, nil
+	}
+
+	moduleDirs, err := workspaceModuleDirs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(moduleDirs) == 0 {
+		return nil, fmt.Errorf("depgraph: no go.mod in %s, and it is not a Go workspace root (no active go.work)", dir)
+	}
+
+	patterns := make([]string, 0, len(moduleDirs))
+	for _, mdir := range moduleDirs {
+		pattern, err := relPattern(dir, mdir)
+		if err != nil {
+			return nil, err
+		}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
+}
+
+// workspaceModuleDirs returns the directories of every module in scope for
+// the workspace containing dir (empty, with no error, if dir isn't in
+// workspace mode at all - e.g. GOWORK=off or no go.work above it).
+func workspaceModuleDirs(dir string) ([]string, error) {
+	work, err := goEnv(dir, "GOWORK")
+	if err != nil {
+		return nil, err
+	}
+	if work == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("depgraph: listing workspace modules: %w\n%s", err, stderr.String())
+	}
+
+	var dirs []string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			dirs = append(dirs, line)
+		}
+	}
+	return dirs, nil
+}
+
+func goEnv(dir, key string) (string, error) {
+	cmd := exec.Command("go", "env", key)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("depgraph: go env %s: %w\n%s", key, err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// relPattern builds a `go list`-style "<dir>/..." pattern for target,
+// expressed relative to base.
+func relPattern(base, target string) (string, error) {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return "", fmt.Errorf("depgraph: resolving %s relative to %s: %w", target, base, err)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." {
+		return "./...", nil
+	}
+	if !strings.HasPrefix(rel, "..") {
+		rel = "./" + rel
+	}
+	return rel + "/...", nil
 }
 
 // TargetForFile resolves an absolute file path to the import path of the

@@ -33,7 +33,7 @@ func Compute(g *depgraph.Graph, changedFiles []string) Result {
 
 	for _, f := range changedFiles {
 		base := filepath.Base(f)
-		if base == "go.mod" || base == "go.sum" {
+		if base == "go.mod" || base == "go.sum" || base == "go.work" || base == "go.work.sum" {
 			fullRunReasons = append(fullRunReasons, f)
 			continue
 		}

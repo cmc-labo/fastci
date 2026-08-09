@@ -88,6 +88,63 @@ func TestTargetForFile(t *testing.T) {
 	}
 }
 
+func sampleWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "sampleworkspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestLoadWorkspaceCrossModuleEdges(t *testing.T) {
+	dir := sampleWorkspaceDir(t)
+	g, err := depgraph.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	wantModules := []string{"wsleaf", "wsroot"}
+	if !equal(g.ModulePaths, wantModules) {
+		t.Errorf("ModulePaths = %v, want %v", g.ModulePaths, wantModules)
+	}
+
+	for _, n := range []string{"wsroot/pkgconsumer", "wsleaf/pkgleaf"} {
+		if _, ok := g.Nodes[n]; !ok {
+			t.Errorf("missing node %s", n)
+		}
+	}
+
+	if !g.Nodes["wsroot/pkgconsumer"].Imports["wsleaf/pkgleaf"] {
+		t.Error("wsroot/pkgconsumer should import wsleaf/pkgleaf across the workspace module boundary")
+	}
+	got := append([]string(nil), g.Importers["wsleaf/pkgleaf"]...)
+	want := []string{"wsroot/pkgconsumer"}
+	if !equal(got, want) {
+		t.Errorf("Importers[wsleaf/pkgleaf] = %v, want %v", got, want)
+	}
+}
+
+func TestPatternsPlainModuleVsWorkspaceRoot(t *testing.T) {
+	modPatterns, err := depgraph.Patterns(sampleModDir(t))
+	if err != nil {
+		t.Fatalf("Patterns(module dir): %v", err)
+	}
+	if !equal(modPatterns, []string{"./..."}) {
+		t.Errorf("Patterns(module dir) = %v, want [./...]", modPatterns)
+	}
+
+	wsPatterns, err := depgraph.Patterns(sampleWorkspaceDir(t))
+	if err != nil {
+		t.Fatalf("Patterns(workspace root): %v", err)
+	}
+	sort.Strings(wsPatterns)
+	want := []string{"./modleaf/...", "./modroot/..."}
+	if !equal(wsPatterns, want) {
+		t.Errorf("Patterns(workspace root) = %v, want %v", wsPatterns, want)
+	}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
