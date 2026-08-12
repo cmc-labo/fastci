@@ -1,0 +1,6 @@
+[project]
+name = "samplepytest"
+version = "0.0.0"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -8,12 +8,14 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer"
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/impact"
 )
 
 var goAnalyzer analyzer.Analyzer = goanalyzer.New()
 var jestAnalyzer analyzer.Analyzer = jestanalyzer.New()
+var pytestAnalyzer analyzer.Analyzer = pytestanalyzer.New()
 
 func loadSampleGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
@@ -210,6 +212,90 @@ func TestComputeJestNonSourceFileIsIgnored(t *testing.T) {
 		filepath.Join(dir, "src", "consumer.test.ts"),
 		filepath.Join(dir, "src", "leaf.test.ts"),
 		filepath.Join(dir, "src", "mid.test.ts"),
+	}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func loadSamplePytestGraph(t *testing.T) (*graph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplepytest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := pytestAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputePytestTransitiveImpactThroughRelativeImports(t *testing.T) {
+	g, dir := loadSamplePytestGraph(t)
+
+	// leaf.py <- mid.py (`from .leaf import hello`) <- sub/consumer.py
+	// (`from ..mid import greet`, crossing a package boundary) <-
+	// test_consumer.py. test_leaf.py and test_mid.py also import their
+	// respective modules directly. test_isolated.py must NOT be selected.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "mypkg", "leaf.py")}, pytestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{
+		filepath.Join(dir, "tests", "test_consumer.py"),
+		filepath.Join(dir, "tests", "test_leaf.py"),
+		filepath.Join(dir, "tests", "test_mid.py"),
+	}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputePytestTestOnlyDependencyEdge(t *testing.T) {
+	g, dir := loadSamplePytestGraph(t)
+
+	// testutil.py is imported only by test_leaf.py (not by any production
+	// file); that edge must still be honored.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "mypkg", "testutil.py")}, pytestAnalyzer)
+	want := []string{filepath.Join(dir, "tests", "test_leaf.py")}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputePytestPyprojectTriggersFullRun(t *testing.T) {
+	g, dir := loadSamplePytestGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "pyproject.toml")}, pytestAnalyzer)
+	if !res.FullRun {
+		t.Fatal("expected a full run when pyproject.toml changes")
+	}
+}
+
+func TestComputePytestConftestTriggersFullRun(t *testing.T) {
+	g, dir := loadSamplePytestGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "tests", "conftest.py")}, pytestAnalyzer)
+	if !res.FullRun {
+		t.Fatal("expected a full run when conftest.py changes")
+	}
+}
+
+func TestComputePytestNonSourceFileIsIgnored(t *testing.T) {
+	g, dir := loadSamplePytestGraph(t)
+
+	res := impact.Compute(g, []string{
+		filepath.Join(dir, "src", "mypkg", "leaf.py"),
+		filepath.Join(dir, "README.md"),
+	}, pytestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{
+		filepath.Join(dir, "tests", "test_consumer.py"),
+		filepath.Join(dir, "tests", "test_leaf.py"),
+		filepath.Join(dir, "tests", "test_mid.py"),
 	}
 	if !reflect.DeepEqual(res.Targets, want) {
 		t.Errorf("Targets = %v, want %v", res.Targets, want)

@@ -1,0 +1,2 @@
+def isolated():
+    return "isolated"

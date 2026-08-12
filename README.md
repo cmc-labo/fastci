@@ -14,15 +14,17 @@ This is an early, incrementally-developed project. Today it covers:
 
 - **Go** (`go test`) — package-level, module or [workspace](https://go.dev/ref/mod#workspaces)
 - **TypeScript/JavaScript with Jest** — file-level
+- **Python with pytest** — file-level
 
 See [Roadmap](#roadmap) for what's next.
 
 ## How it works
 
 1. `fastci test` auto-detects the project type in the working directory
-   (Go module/workspace, or a Jest-configured `package.json`) and resolves
-   the files changed in your working tree (or, with `--base`, the files
-   changed between a base ref and `HEAD`).
+   (Go module/workspace, a Jest-configured `package.json`, or a
+   pytest-configured Python project) and resolves the files changed in
+   your working tree (or, with `--base`, the files changed between a base
+   ref and `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
    regex/string matching over import statements:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
@@ -33,6 +35,13 @@ See [Roadmap](#roadmap) for what's next.
      understands relative imports, `tsconfig.json` `paths`/`baseUrl`
      aliases, and extension/index resolution — the same way your bundler
      would resolve them.
+   - pytest: every `.py` file is parsed with Python's own `ast` module, and
+     import targets (including relative imports like `from ..pkg import x`)
+     are normalized with the stdlib's `importlib.util.resolve_name`, then
+     matched against a registry of every file's dotted module name built by
+     walking the project tree. This never imports/executes the project's
+     own code — see [Current limitations](#current-limitations) for what
+     that trades off.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -52,7 +61,9 @@ go install github.com/hpscript/fastci/cmd/fastci@latest
 ## Usage
 
 Run from the project root — a Go module (`go.mod`), a Go workspace
-(`go.work`), or a Jest project (`package.json` with Jest configured):
+(`go.work`), a Jest project (`package.json` with Jest configured), or a
+pytest project (`pytest.ini`, `conftest.py`, or a
+`[tool.pytest.ini_options]`/`[tool:pytest]` section):
 
 ```sh
 # Test whatever's affected by your uncommitted changes
@@ -70,6 +81,7 @@ fastci test --all
 # Forward flags to the underlying test runner
 fastci test -- -race -v      # go test
 fastci test -- --coverage    # jest
+fastci test -- -x -k foo     # pytest
 ```
 
 Example output (Go):
@@ -95,6 +107,20 @@ fastci: selected 3/4 test target(s) (jest, 25% skipped)
     src/consumer.test.ts
     src/leaf.test.ts
     src/mid.test.ts
+fastci: dry-run, not executing tests
+```
+
+Example output (pytest, with a relative import crossing a package
+boundary):
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  src/mypkg/leaf.py
+fastci: selected 3/4 test target(s) (pytest, 25% skipped)
+    tests/test_consumer.py
+    tests/test_leaf.py
+    tests/test_mid.py
 fastci: dry-run, not executing tests
 ```
 
@@ -126,6 +152,12 @@ jobs:
       #   with:
       #     node-version: 22
       # - run: npm ci
+
+      # pytest projects
+      # - uses: actions/setup-python@v5
+      #   with:
+      #     python-version: "3.12"
+      # - run: pip install -r requirements.txt
 
       - name: Fetch base branch
         run: git fetch origin ${{ github.base_ref }} --depth=1
@@ -167,6 +199,30 @@ jobs:
   `jest.config.json` and the `package.json` `"jest"` field are read.
 - Ambient `.d.ts` files are ignored (no runtime effect on tests).
 
+**pytest**
+- Import resolution is entirely static (AST parsing + dotted-name matching
+  against files discovered on disk) and never imports the project's own
+  code, unlike a naive `importlib.util.find_spec` approach — this avoids
+  executing arbitrary `__init__.py` side effects or requiring dependencies
+  to be installed just to build the graph, but it means **dynamic imports**
+  (`importlib.import_module(...)` with a computed name, `__import__`,
+  plugin/entry-point style loading) and symbols re-exported through a
+  package's `__init__.py` from somewhere non-obvious aren't tracked.
+- Source roots are the project directory and, if present, a top-level
+  `src/` directory (covering both flat and `src` layouts). Other custom
+  layouts (e.g. a `package_dir` remapping in `setup.cfg`) aren't read.
+- `conftest.py` changing anywhere forces a full run, since fixture scope
+  and `autouse` effects aren't something the import graph captures safely.
+- Test-file discovery uses pytest's default conventions (`test_*.py` /
+  `*_test.py`). Custom `python_files`/`python_classes`/`python_functions`
+  overrides in `pytest.ini`/`pyproject.toml`/`setup.cfg` aren't honored
+  yet — such a project still works, but test-file classification falls
+  back to the defaults.
+- Building the graph requires a `python3` (or `python`) interpreter on
+  `PATH`; running tests additionally looks for `.venv/bin/pytest`,
+  `venv/bin/pytest`, or `env/bin/pytest` before falling back to `pytest`/
+  `python3 -m pytest` on `PATH`.
+
 ## Roadmap
 
 This tracks the phased plan in the project design doc:
@@ -179,8 +235,8 @@ This tracks the phased plan in the project design doc:
   `fastci guard` (supply-chain / runtime security guardrails).
 
 Language coverage grows incrementally alongside this. Candidates being
-considered next: Jest monorepo/workspace cross-package resolution, Python
-(pytest), and Rust (Cargo).
+considered next: Jest monorepo/workspace cross-package resolution, and
+Rust (Cargo).
 
 ## License
 

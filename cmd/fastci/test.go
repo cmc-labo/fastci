@@ -10,6 +10,7 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer"
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
 	"github.com/hpscript/fastci/internal/gitdiff"
 	"github.com/hpscript/fastci/internal/impact"
 )
@@ -20,6 +21,7 @@ func candidateAnalyzers() []analyzer.Analyzer {
 	return []analyzer.Analyzer{
 		goanalyzer.New(),
 		jestanalyzer.New(),
+		pytestanalyzer.New(),
 	}
 }
 
@@ -40,14 +42,16 @@ the packages/files that changed or transitively depend on something that
 changed.
 
 The project type is auto-detected: a Go module or workspace (go.mod /
-go.work), or a Jest-based TypeScript/JavaScript project (package.json with
-Jest configured).
+go.work), a Jest-based TypeScript/JavaScript project (package.json with
+Jest configured), or a pytest-based Python project (pytest.ini,
+conftest.py, or a "[tool.pytest.ini_options]"/"[tool:pytest]" section).
 
 Flags after "--" are forwarded to the underlying test runner unchanged,
 e.g.:
 
   fastci test -- -v -race        # go test
-  fastci test -- --coverage      # jest`,
+  fastci test -- --coverage      # jest
+  fastci test -- -x -k foo       # pytest`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTest(cmd, testOpts{
 				base:      base,
