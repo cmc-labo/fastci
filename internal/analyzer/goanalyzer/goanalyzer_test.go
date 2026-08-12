@@ -1,26 +1,36 @@
-package depgraph_test
+package goanalyzer_test
 
 import (
 	"path/filepath"
 	"sort"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/depgraph"
+	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 )
 
 func sampleModDir(t *testing.T) string {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplemod"))
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "samplemod"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return dir
 }
 
-func TestLoadBuildsForwardAndReverseEdges(t *testing.T) {
-	g, err := depgraph.Load(sampleModDir(t))
+func sampleWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "sampleworkspace"))
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestBuildForwardAndReverseEdges(t *testing.T) {
+	a := goanalyzer.New()
+	g, err := a.Build(sampleModDir(t))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
 	}
 
 	wantNodes := []string{
@@ -72,9 +82,10 @@ func TestLoadBuildsForwardAndReverseEdges(t *testing.T) {
 
 func TestTargetForFile(t *testing.T) {
 	dir := sampleModDir(t)
-	g, err := depgraph.Load(dir)
+	a := goanalyzer.New()
+	g, err := a.Build(dir)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 
 	f := filepath.Join(dir, "pkgb", "pkgb.go")
@@ -88,25 +99,12 @@ func TestTargetForFile(t *testing.T) {
 	}
 }
 
-func sampleWorkspaceDir(t *testing.T) string {
-	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "sampleworkspace"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func TestLoadWorkspaceCrossModuleEdges(t *testing.T) {
+func TestBuildWorkspaceCrossModuleEdges(t *testing.T) {
 	dir := sampleWorkspaceDir(t)
-	g, err := depgraph.Load(dir)
+	a := goanalyzer.New()
+	g, err := a.Build(dir)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	wantModules := []string{"wsleaf", "wsroot"}
-	if !equal(g.ModulePaths, wantModules) {
-		t.Errorf("ModulePaths = %v, want %v", g.ModulePaths, wantModules)
+		t.Fatalf("Build: %v", err)
 	}
 
 	for _, n := range []string{"wsroot/pkgconsumer", "wsleaf/pkgleaf"} {
@@ -125,8 +123,22 @@ func TestLoadWorkspaceCrossModuleEdges(t *testing.T) {
 	}
 }
 
+func TestDetect(t *testing.T) {
+	a := goanalyzer.New()
+
+	for _, dir := range []string{sampleModDir(t), sampleWorkspaceDir(t)} {
+		ok, err := a.Detect(dir)
+		if err != nil {
+			t.Fatalf("Detect(%s): %v", dir, err)
+		}
+		if !ok {
+			t.Errorf("Detect(%s) = false, want true", dir)
+		}
+	}
+}
+
 func TestPatternsPlainModuleVsWorkspaceRoot(t *testing.T) {
-	modPatterns, err := depgraph.Patterns(sampleModDir(t))
+	modPatterns, err := goanalyzer.Patterns(sampleModDir(t))
 	if err != nil {
 		t.Fatalf("Patterns(module dir): %v", err)
 	}
@@ -134,7 +146,7 @@ func TestPatternsPlainModuleVsWorkspaceRoot(t *testing.T) {
 		t.Errorf("Patterns(module dir) = %v, want [./...]", modPatterns)
 	}
 
-	wsPatterns, err := depgraph.Patterns(sampleWorkspaceDir(t))
+	wsPatterns, err := goanalyzer.Patterns(sampleWorkspaceDir(t))
 	if err != nil {
 		t.Fatalf("Patterns(workspace root): %v", err)
 	}

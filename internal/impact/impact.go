@@ -1,61 +1,63 @@
 // Package impact determines which test targets are affected by a given set
-// of changed files, given a package dependency graph.
+// of changed files, given a dependency graph and the analyzer that built
+// it.
 package impact
 
 import (
-	"path/filepath"
 	"sort"
 
-	"github.com/hpscript/fastci/internal/depgraph"
+	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/graph"
 )
 
 // Result is the outcome of an impact analysis.
 type Result struct {
-	// Targets is the sorted list of import paths that should be tested.
+	// Targets is the sorted list of node IDs that should be tested.
 	Targets []string
-	// ChangedTargets is the sorted list of import paths that changed
-	// directly (a subset of Targets, unless they have no test files).
+	// ChangedTargets is the sorted list of node IDs that changed directly
+	// (a subset of Targets, unless they have no test files).
 	ChangedTargets []string
 	// FullRun is true when the analysis could not safely narrow the test
-	// set (e.g. go.mod changed, or a changed .go file couldn't be resolved
-	// to a package) and every test target should run instead.
+	// set (e.g. a manifest/lockfile changed, or a changed source file
+	// couldn't be resolved to a node) and every test target should run
+	// instead.
 	FullRun bool
 	// FullRunReasons lists the changed files that forced a full run.
 	FullRunReasons []string
 }
 
 // Compute determines the set of test targets affected by changedFiles
-// (absolute paths) within the module described by g.
-func Compute(g *depgraph.Graph, changedFiles []string) Result {
+// (absolute paths) within the graph g, using a to classify files that
+// don't resolve to a graph node.
+func Compute(g *graph.Graph, changedFiles []string, a analyzer.Analyzer) Result {
 	changedTargets := map[string]bool{}
-	var unresolvedGo []string
+	var unresolved []string
 	var fullRunReasons []string
 
 	for _, f := range changedFiles {
-		base := filepath.Base(f)
-		if base == "go.mod" || base == "go.sum" || base == "go.work" || base == "go.work.sum" {
+		if a.FullRunFile(f) {
 			fullRunReasons = append(fullRunReasons, f)
-			continue
-		}
-		if filepath.Ext(f) != ".go" {
-			// Non-Go changes (docs, workflow YAML, etc.) don't affect the
-			// package graph, so they're safe to ignore.
 			continue
 		}
 		if t, ok := g.TargetForFile(f); ok {
 			changedTargets[t] = true
 			continue
 		}
-		unresolvedGo = append(unresolvedGo, f)
+		if a.Ignorable(f) {
+			// Outside the analyzer's tracked source set (docs, assets,
+			// etc.) - safe to ignore, it can't affect the graph.
+			continue
+		}
+		unresolved = append(unresolved, f)
 	}
 
-	if len(unresolvedGo) > 0 {
-		fullRunReasons = append(fullRunReasons, unresolvedGo...)
+	if len(unresolved) > 0 {
+		fullRunReasons = append(fullRunReasons, unresolved...)
 	}
 
 	if len(fullRunReasons) > 0 {
 		return Result{
-			Targets:        allTestTargets(g),
+			Targets:        g.TestNodeIDs(),
 			FullRun:        true,
 			FullRunReasons: fullRunReasons,
 		}
@@ -80,7 +82,7 @@ func Compute(g *depgraph.Graph, changedFiles []string) Result {
 // bfsReverse walks the reverse dependency graph starting from seeds,
 // returning every target reachable by "is imported by" edges - i.e. every
 // target that changing a seed could possibly affect.
-func bfsReverse(g *depgraph.Graph, seeds map[string]bool) map[string]bool {
+func bfsReverse(g *graph.Graph, seeds map[string]bool) map[string]bool {
 	affected := make(map[string]bool, len(seeds))
 	queue := make([]string, 0, len(seeds))
 	for t := range seeds {
@@ -98,17 +100,6 @@ func bfsReverse(g *depgraph.Graph, seeds map[string]bool) map[string]bool {
 		}
 	}
 	return affected
-}
-
-func allTestTargets(g *depgraph.Graph) []string {
-	var out []string
-	for path, n := range g.Nodes {
-		if n.HasTestFiles {
-			out = append(out, path)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 func sortedKeys(m map[string]bool) []string {

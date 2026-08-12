@@ -1,57 +1,54 @@
-// Package depgraph builds a package-level dependency graph for a Go module,
-// keyed by the import path you would pass to `go test`.
+// Package goanalyzer implements the fastci analyzer.Analyzer interface for
+// Go modules and workspaces, keyed by the import path you would pass to
+// `go test`.
 //
 // It is built on top of golang.org/x/tools/go/packages with Tests:true,
 // which yields several synthetic package variants per directory (the plain
 // production package, an internal test-augmented package, an external
 // "_test" package, and a synthetic test-binary main package). This package
-// collapses all of those back down into one Node per test target, since
-// that's the unit fastci ultimately runs `go test` against.
-package depgraph
+// collapses all of those back down into one graph.Node per test target,
+// since that's the unit fastci ultimately runs `go test` against.
+package goanalyzer
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/hpscript/fastci/internal/graph"
+	"github.com/hpscript/fastci/internal/runner"
 )
 
-// Node is one `go test`-able target: a single directory/import path, with
-// its production and test files merged together.
-type Node struct {
-	ImportPath   string
-	Files        []string
-	HasTestFiles bool
-	Imports      map[string]bool // import paths of other Nodes this one depends on
+// Analyzer is the Go implementation of analyzer.Analyzer.
+type Analyzer struct{}
+
+// New returns a Go analyzer.
+func New() *Analyzer { return &Analyzer{} }
+
+func (*Analyzer) Name() string { return "go" }
+
+// Detect reports whether dir is a Go module root (go.mod present) or a Go
+// workspace root (go.work active for dir).
+func (*Analyzer) Detect(dir string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return true, nil
+	}
+	work, err := goEnv(dir, "GOWORK")
+	if err != nil {
+		return false, err
+	}
+	return work != "", nil
 }
 
-// Graph is the full dependency graph for a module (or, in workspace mode,
-// every module listed in go.work).
-type Graph struct {
-	// ModulePaths is the sorted set of main module paths the graph was
-	// built from - one entry for a plain module, several in workspace mode.
-	ModulePaths []string
-	// Nodes maps import path -> Node.
-	Nodes map[string]*Node
-	// Importers maps import path -> import paths of Nodes that directly
-	// depend on it (the reverse of Node.Imports).
-	Importers map[string][]string
-	// fileToTarget maps absolute file path -> owning import path.
-	fileToTarget map[string]string
-	// dirToTargets maps absolute directory path -> import paths rooted there.
-	// Used as a fallback when a changed file no longer exists on disk (e.g.
-	// it was deleted) and so can't be resolved via fileToTarget.
-	dirToTargets map[string][]string
-}
-
-// Load builds the dependency graph for the Go module (or workspace) rooted
+// Build builds the dependency graph for the Go module (or workspace) rooted
 // at dir by invoking `go list` (via golang.org/x/tools/go/packages).
-func Load(dir string) (*Graph, error) {
+func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	patterns, err := Patterns(dir)
 	if err != nil {
 		return nil, err
@@ -65,7 +62,7 @@ func Load(dir string) (*Graph, error) {
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
-		return nil, fmt.Errorf("depgraph: loading packages: %w", err)
+		return nil, fmt.Errorf("goanalyzer: loading packages: %w", err)
 	}
 
 	var loadErrs []string
@@ -75,42 +72,25 @@ func Load(dir string) (*Graph, error) {
 		}
 	})
 	if len(loadErrs) > 0 {
-		return nil, fmt.Errorf("depgraph: %d package load error(s), e.g. %s", len(loadErrs), loadErrs[0])
+		return nil, fmt.Errorf("goanalyzer: %d package load error(s), e.g. %s", len(loadErrs), loadErrs[0])
 	}
 
-	g := &Graph{
-		Nodes:        map[string]*Node{},
-		Importers:    map[string][]string{},
-		fileToTarget: map[string]string{},
-		dirToTargets: map[string][]string{},
-	}
-
-	getNode := func(importPath string) *Node {
-		n, ok := g.Nodes[importPath]
-		if !ok {
-			n = &Node{ImportPath: importPath, Imports: map[string]bool{}}
-			g.Nodes[importPath] = n
-		}
-		return n
-	}
+	g := graph.New()
 
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if p.Module == nil || !p.Module.Main {
 			return // stdlib or third-party dependency: not part of the module(s) under test
 		}
-		g.ModulePaths = appendUnique(g.ModulePaths, p.Module.Path)
 		if isTestBinaryMain(p) {
 			return // synthetic "foo.test" main package; the real target is visited separately
 		}
 
 		target := realTarget(p)
-		n := getNode(target)
+		n := g.Node(target)
 		if hasTestFile(p.GoFiles) {
 			n.HasTestFiles = true
 		}
-		for _, f := range p.GoFiles {
-			n.Files = append(n.Files, f)
-		}
+		n.Files = append(n.Files, p.GoFiles...)
 
 		for _, imp := range p.Imports {
 			if imp.Module == nil || !imp.Module.Main || isTestBinaryMain(imp) {
@@ -124,22 +104,39 @@ func Load(dir string) (*Graph, error) {
 		}
 	})
 
-	for path, n := range g.Nodes {
-		n.Files = dedup(n.Files)
-		for _, f := range n.Files {
-			g.fileToTarget[f] = path
-			dir := filepath.Dir(f)
-			g.dirToTargets[dir] = appendUnique(g.dirToTargets[dir], path)
-		}
-	}
-	for path, n := range g.Nodes {
-		for imp := range n.Imports {
-			g.Importers[imp] = appendUnique(g.Importers[imp], path)
-		}
-	}
-	sort.Strings(g.ModulePaths)
+	g.IndexFiles()
+	g.BuildImporters()
 
 	return g, nil
+}
+
+// FullRunFile reports whether a changed file should force a full test run:
+// changes to go.mod/go.sum/go.work/go.work.sum can affect the build list or
+// dependency versions in ways the import graph alone doesn't capture.
+func (*Analyzer) FullRunFile(absPath string) bool {
+	switch filepath.Base(absPath) {
+	case "go.mod", "go.sum", "go.work", "go.work.sum":
+		return true
+	}
+	return false
+}
+
+// Ignorable reports whether a changed non-Go file is safe to ignore.
+func (*Analyzer) Ignorable(absPath string) bool {
+	return filepath.Ext(absPath) != ".go"
+}
+
+// AllTargets returns the `go list`-style patterns covering every package
+// rooted at dir, for a full/--all run.
+func (*Analyzer) AllTargets(dir string) ([]string, error) {
+	return Patterns(dir)
+}
+
+// RunTests runs `go test` against targets (import paths or patterns).
+func (*Analyzer) RunTests(ctx context.Context, dir string, targets []string, extraArgs []string) error {
+	argv := append([]string{"go", "test"}, extraArgs...)
+	argv = append(argv, targets...)
+	return runner.Run(ctx, runner.Options{Dir: dir, Argv: argv})
 }
 
 // Patterns returns the `go list`-style package patterns that cover every
@@ -156,7 +153,7 @@ func Patterns(dir string) ([]string, error) {
 		return nil, err
 	}
 	if len(moduleDirs) == 0 {
-		return nil, fmt.Errorf("depgraph: no go.mod in %s, and it is not a Go workspace root (no active go.work)", dir)
+		return nil, fmt.Errorf("goanalyzer: no go.mod in %s, and it is not a Go workspace root (no active go.work)", dir)
 	}
 
 	patterns := make([]string, 0, len(moduleDirs))
@@ -188,7 +185,7 @@ func workspaceModuleDirs(dir string) ([]string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("depgraph: listing workspace modules: %w\n%s", err, stderr.String())
+		return nil, fmt.Errorf("goanalyzer: listing workspace modules: %w\n%s", err, stderr.String())
 	}
 
 	var dirs []string
@@ -208,7 +205,7 @@ func goEnv(dir, key string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("depgraph: go env %s: %w\n%s", key, err, stderr.String())
+		return "", fmt.Errorf("goanalyzer: go env %s: %w\n%s", key, err, stderr.String())
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -218,7 +215,7 @@ func goEnv(dir, key string) (string, error) {
 func relPattern(base, target string) (string, error) {
 	rel, err := filepath.Rel(base, target)
 	if err != nil {
-		return "", fmt.Errorf("depgraph: resolving %s relative to %s: %w", target, base, err)
+		return "", fmt.Errorf("goanalyzer: resolving %s relative to %s: %w", target, base, err)
 	}
 	rel = filepath.ToSlash(rel)
 	if rel == "." {
@@ -228,21 +225,6 @@ func relPattern(base, target string) (string, error) {
 		rel = "./" + rel
 	}
 	return rel + "/...", nil
-}
-
-// TargetForFile resolves an absolute file path to the import path of the
-// Node it belongs to. ok is false if the file isn't part of any known
-// package (e.g. it's a non-Go file, or it was deleted and its directory no
-// longer resolves to a single unambiguous target).
-func (g *Graph) TargetForFile(absPath string) (target string, ok bool) {
-	if t, ok := g.fileToTarget[absPath]; ok {
-		return t, true
-	}
-	dir := filepath.Dir(absPath)
-	if targets := g.dirToTargets[dir]; len(targets) == 1 {
-		return targets[0], true
-	}
-	return "", false
 }
 
 func realTarget(p *packages.Package) string {
@@ -264,25 +246,4 @@ func hasTestFile(files []string) bool {
 		}
 	}
 	return false
-}
-
-func dedup(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func appendUnique(list []string, v string) []string {
-	for _, existing := range list {
-		if existing == v {
-			return list
-		}
-	}
-	return append(list, v)
 }

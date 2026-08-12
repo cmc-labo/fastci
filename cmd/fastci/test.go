@@ -7,11 +7,21 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hpscript/fastci/internal/depgraph"
+	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/gitdiff"
 	"github.com/hpscript/fastci/internal/impact"
-	"github.com/hpscript/fastci/internal/runner"
 )
+
+// candidateAnalyzers lists every built-in analyzer, tried in order against
+// the working directory until one reports it can handle the project.
+func candidateAnalyzers() []analyzer.Analyzer {
+	return []analyzer.Analyzer{
+		goanalyzer.New(),
+		jestanalyzer.New(),
+	}
+}
 
 func newTestCmd() *cobra.Command {
 	var (
@@ -22,15 +32,22 @@ func newTestCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "test [-- go test flags]",
+		Use:   "test [-- test runner flags]",
 		Short: "Run only the tests affected by the current change",
-		Long: `test analyzes the current git diff, builds a package dependency graph for
-the Go module in the working directory, and runs "go test" only against the
-packages that changed or transitively depend on something that changed.
+		Long: `test analyzes the current git diff, builds a dependency graph for the
+project in the working directory, and runs its test runner only against
+the packages/files that changed or transitively depend on something that
+changed.
 
-Flags after "--" are forwarded to "go test" unchanged, e.g.:
+The project type is auto-detected: a Go module or workspace (go.mod /
+go.work), or a Jest-based TypeScript/JavaScript project (package.json with
+Jest configured).
 
-  fastci test -- -v -race`,
+Flags after "--" are forwarded to the underlying test runner unchanged,
+e.g.:
+
+  fastci test -- -v -race        # go test
+  fastci test -- --coverage      # jest`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTest(cmd, testOpts{
 				base:      base,
@@ -64,10 +81,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		return err
 	}
 
-	// Patterns doubles as our "is this a valid Go module or workspace root"
-	// check: it fails clearly if cwd has neither a go.mod nor an active
-	// go.work.
-	allPatterns, err := depgraph.Patterns(cwd)
+	a, err := analyzer.Detect(cwd, candidateAnalyzers())
 	if err != nil {
 		return err
 	}
@@ -78,12 +92,16 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 	}
 
 	if opts.all {
-		fmt.Println("fastci: --all set, running the full test suite")
+		fmt.Printf("fastci: --all set, running the full test suite (%s)\n", a.Name())
 		if opts.dryRun {
-			fmt.Println("fastci: dry-run, not executing go test")
+			fmt.Println("fastci: dry-run, not executing tests")
 			return nil
 		}
-		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: allPatterns, ExtraArgs: opts.extraArgs})
+		allTargets, err := a.AllTargets(cwd)
+		if err != nil {
+			return err
+		}
+		return a.RunTests(cmd.Context(), cwd, allTargets, opts.extraArgs)
 	}
 
 	changed, err := gitdiff.ChangedFiles(repoRoot, opts.base)
@@ -101,24 +119,24 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		}
 	}
 
-	graph, err := depgraph.Load(cwd)
+	g, err := a.Build(cwd)
 	if err != nil {
 		return fmt.Errorf("building dependency graph: %w", err)
 	}
 
-	result := impact.Compute(graph, changed)
-	total := countTestTargets(graph)
+	result := impact.Compute(g, changed, a)
+	total := len(g.TestNodeIDs())
 
 	if result.FullRun {
-		fmt.Println("fastci: could not safely narrow the test set, running the full suite. Reason(s):")
+		fmt.Printf("fastci: could not safely narrow the test set, running the full suite (%s). Reason(s):\n", a.Name())
 		for _, r := range result.FullRunReasons {
 			fmt.Printf("  - %s\n", relOrSelf(repoRoot, r))
 		}
 		if opts.dryRun {
-			fmt.Println("fastci: dry-run, not executing go test")
+			fmt.Println("fastci: dry-run, not executing tests")
 			return nil
 		}
-		return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: allPatterns, ExtraArgs: opts.extraArgs})
+		return a.RunTests(cmd.Context(), cwd, result.Targets, opts.extraArgs)
 	}
 
 	if len(result.Targets) == 0 {
@@ -131,7 +149,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 	if total > 0 {
 		pct = float64(skipped) / float64(total) * 100
 	}
-	fmt.Printf("fastci: selected %d/%d test package(s) (%.0f%% skipped)\n", len(result.Targets), total, pct)
+	fmt.Printf("fastci: selected %d/%d test target(s) (%s, %.0f%% skipped)\n", len(result.Targets), total, a.Name(), pct)
 	changedSet := make(map[string]bool, len(result.ChangedTargets))
 	for _, t := range result.ChangedTargets {
 		changedSet[t] = true
@@ -141,25 +159,15 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		if changedSet[t] {
 			marker = "*"
 		}
-		fmt.Printf("  %s %s\n", marker, t)
+		fmt.Printf("  %s %s\n", marker, relOrSelf(repoRoot, t))
 	}
 
 	if opts.dryRun {
-		fmt.Println("fastci: dry-run, not executing go test")
+		fmt.Println("fastci: dry-run, not executing tests")
 		return nil
 	}
 
-	return runner.Run(cmd.Context(), runner.Options{Dir: cwd, Targets: result.Targets, ExtraArgs: opts.extraArgs})
-}
-
-func countTestTargets(g *depgraph.Graph) int {
-	n := 0
-	for _, node := range g.Nodes {
-		if node.HasTestFiles {
-			n++
-		}
-	}
-	return n
+	return a.RunTests(cmd.Context(), cwd, result.Targets, opts.extraArgs)
 }
 
 func relOrSelf(base, path string) string {

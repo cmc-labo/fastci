@@ -1,27 +1,29 @@
-// Package runner executes `go test` against a chosen set of package import
-// paths, streaming output straight through to the caller's terminal.
+// Package runner executes a test-runner command line, streaming output
+// straight through to the caller's terminal. It has no knowledge of which
+// language or test runner is being invoked - each analyzer builds its own
+// argv (go test, jest, ...) and hands it to Run.
 package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 )
 
 // Options configures a test run.
 type Options struct {
-	Dir       string   // working directory to run `go test` in
-	Targets   []string // import paths to test
-	ExtraArgs []string // additional args forwarded to `go test`, e.g. -v, -race
+	Dir  string   // working directory to run the command in
+	Argv []string // full command line, e.g. ["go", "test", "./..."]
 }
 
-// Run executes `go test` against opts.Targets and returns the command's
-// error (nil on success, *exec.ExitError on test failure).
+// Run executes opts.Argv and returns the command's error (nil on success,
+// *exec.ExitError on test failure).
 func Run(ctx context.Context, opts Options) error {
-	args := append([]string{"test"}, opts.ExtraArgs...)
-	args = append(args, opts.Targets...)
-
-	cmd := exec.CommandContext(ctx, "go", args...)
+	if len(opts.Argv) == 0 {
+		return fmt.Errorf("runner: empty command")
+	}
+	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
