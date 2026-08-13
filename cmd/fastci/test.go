@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/analyzer/cargoanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
@@ -22,6 +23,7 @@ func candidateAnalyzers() []analyzer.Analyzer {
 		goanalyzer.New(),
 		jestanalyzer.New(),
 		pytestanalyzer.New(),
+		cargoanalyzer.New(),
 	}
 }
 
@@ -43,15 +45,17 @@ changed.
 
 The project type is auto-detected: a Go module or workspace (go.mod /
 go.work), a Jest-based TypeScript/JavaScript project (package.json with
-Jest configured), or a pytest-based Python project (pytest.ini,
-conftest.py, or a "[tool.pytest.ini_options]"/"[tool:pytest]" section).
+Jest configured), a pytest-based Python project (pytest.ini, conftest.py,
+or a "[tool.pytest.ini_options]"/"[tool:pytest]" section), or a Rust crate
+or Cargo workspace (Cargo.toml).
 
 Flags after "--" are forwarded to the underlying test runner unchanged,
 e.g.:
 
   fastci test -- -v -race        # go test
   fastci test -- --coverage      # jest
-  fastci test -- -x -k foo       # pytest`,
+  fastci test -- -x -k foo       # pytest
+  fastci test -- --no-fail-fast  # cargo test`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTest(cmd, testOpts{
 				base:      base,

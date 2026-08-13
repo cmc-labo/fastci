@@ -1,0 +1,10 @@
+[package]
+name = "consumer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mid = { path = "../mid" }
+
+[dev-dependencies]
+testutil = { path = "../testutil" }

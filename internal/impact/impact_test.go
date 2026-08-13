@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/analyzer/cargoanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
@@ -16,6 +17,7 @@ import (
 var goAnalyzer analyzer.Analyzer = goanalyzer.New()
 var jestAnalyzer analyzer.Analyzer = jestanalyzer.New()
 var pytestAnalyzer analyzer.Analyzer = pytestanalyzer.New()
+var cargoAnalyzer analyzer.Analyzer = cargoanalyzer.New()
 
 func loadSampleGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
@@ -297,6 +299,87 @@ func TestComputePytestNonSourceFileIsIgnored(t *testing.T) {
 		filepath.Join(dir, "tests", "test_leaf.py"),
 		filepath.Join(dir, "tests", "test_mid.py"),
 	}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func loadSampleCargoGraph(t *testing.T) (*graph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplecargo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := cargoAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputeCargoTransitiveImpact(t *testing.T) {
+	g, dir := loadSampleCargoGraph(t)
+
+	// leaf <- mid <- consumer (path dependencies). Changing leaf should
+	// select all three; isolated and testutil (no tests of its own) must
+	// not be selected.
+	res := impact.Compute(g, []string{filepath.Join(dir, "crates", "leaf", "src", "lib.rs")}, cargoAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{"consumer", "leaf", "mid"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeCargoLeafChangeIsIsolated(t *testing.T) {
+	g, dir := loadSampleCargoGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "crates", "isolated", "src", "lib.rs")}, cargoAnalyzer)
+	want := []string{"isolated"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeCargoDevDependencyEdge(t *testing.T) {
+	g, dir := loadSampleCargoGraph(t)
+
+	// testutil is only a dev-dependency of consumer (used from its
+	// tests/it.rs integration test); that edge must still be honored.
+	// testutil itself has no tests, so it's not in the result.
+	res := impact.Compute(g, []string{filepath.Join(dir, "crates", "testutil", "src", "lib.rs")}, cargoAnalyzer)
+	want := []string{"consumer"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeCargoTomlTriggersFullRun(t *testing.T) {
+	g, dir := loadSampleCargoGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "crates", "leaf", "Cargo.toml")}, cargoAnalyzer)
+	if !res.FullRun {
+		t.Fatal("expected a full run when a crate's Cargo.toml changes")
+	}
+	want := []string{"consumer", "isolated", "leaf", "mid"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeCargoNonRustFileIsIgnored(t *testing.T) {
+	g, dir := loadSampleCargoGraph(t)
+
+	res := impact.Compute(g, []string{
+		filepath.Join(dir, "crates", "leaf", "src", "lib.rs"),
+		filepath.Join(dir, "README.md"),
+	}, cargoAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{"consumer", "leaf", "mid"}
 	if !reflect.DeepEqual(res.Targets, want) {
 		t.Errorf("Targets = %v, want %v", res.Targets, want)
 	}

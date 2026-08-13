@@ -15,16 +15,17 @@ This is an early, incrementally-developed project. Today it covers:
 - **Go** (`go test`) — package-level, module or [workspace](https://go.dev/ref/mod#workspaces)
 - **TypeScript/JavaScript with Jest** — file-level
 - **Python with pytest** — file-level
+- **Rust with Cargo** — crate-level, single crate or [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
 
 See [Roadmap](#roadmap) for what's next.
 
 ## How it works
 
 1. `fastci test` auto-detects the project type in the working directory
-   (Go module/workspace, a Jest-configured `package.json`, or a
-   pytest-configured Python project) and resolves the files changed in
-   your working tree (or, with `--base`, the files changed between a base
-   ref and `HEAD`).
+   (Go module/workspace, a Jest-configured `package.json`, a
+   pytest-configured Python project, or a Rust crate/Cargo workspace) and
+   resolves the files changed in your working tree (or, with `--base`, the
+   files changed between a base ref and `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
    regex/string matching over import statements:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
@@ -42,6 +43,10 @@ See [Roadmap](#roadmap) for what's next.
      walking the project tree. This never imports/executes the project's
      own code — see [Current limitations](#current-limitations) for what
      that trades off.
+   - Cargo: [`cargo metadata`](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html),
+     which resolves the real crate dependency graph (path dependencies,
+     normal/dev/build dependencies) the same way `cargo build`/`cargo test`
+     would.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -61,9 +66,10 @@ go install github.com/hpscript/fastci/cmd/fastci@latest
 ## Usage
 
 Run from the project root — a Go module (`go.mod`), a Go workspace
-(`go.work`), a Jest project (`package.json` with Jest configured), or a
+(`go.work`), a Jest project (`package.json` with Jest configured), a
 pytest project (`pytest.ini`, `conftest.py`, or a
-`[tool.pytest.ini_options]`/`[tool:pytest]` section):
+`[tool.pytest.ini_options]`/`[tool:pytest]` section), or a Rust crate or
+Cargo workspace (`Cargo.toml`):
 
 ```sh
 # Test whatever's affected by your uncommitted changes
@@ -79,9 +85,10 @@ fastci test --dry-run -v
 fastci test --all
 
 # Forward flags to the underlying test runner
-fastci test -- -race -v      # go test
-fastci test -- --coverage    # jest
-fastci test -- -x -k foo     # pytest
+fastci test -- -race -v        # go test
+fastci test -- --coverage      # jest
+fastci test -- -x -k foo       # pytest
+fastci test -- --no-fail-fast  # cargo test
 ```
 
 Example output (Go):
@@ -124,6 +131,19 @@ fastci: selected 3/4 test target(s) (pytest, 25% skipped)
 fastci: dry-run, not executing tests
 ```
 
+Example output (Cargo, a path-dependency chain across a workspace):
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  crates/leaf/src/lib.rs
+fastci: selected 3/4 test target(s) (cargo, 25% skipped)
+    consumer
+  * leaf
+    mid
+fastci: dry-run, not executing tests
+```
+
 Lines marked `*` are packages/files that changed directly; unmarked lines
 are pulled in transitively because they depend on something that changed.
 
@@ -158,6 +178,9 @@ jobs:
       #   with:
       #     python-version: "3.12"
       # - run: pip install -r requirements.txt
+
+      # Cargo projects: actions-rs or dtolnay/rust-toolchain, or nothing
+      # if the runner image already ships a toolchain.
 
       - name: Fetch base branch
         run: git fetch origin ${{ github.base_ref }} --depth=1
@@ -223,6 +246,27 @@ jobs:
   `venv/bin/pytest`, or `env/bin/pytest` before falling back to `pytest`/
   `python3 -m pytest` on `PATH`.
 
+**Cargo**
+- Granularity is per-crate (like Go's per-package), not per-test-function:
+  any change to a crate reruns `cargo test -p <crate>` for every crate
+  reachable through it in the reverse dependency graph. Unit tests
+  (`#[cfg(test)]` modules embedded in `src/`) and integration tests
+  (`tests/*.rs`) are both covered, since they belong to the same crate.
+- A crate is considered to "have tests" (and so shows up in target counts
+  and gets actually run) if it has a `tests/` directory or any `#[test]`
+  attribute found via a lightweight source scan — not a full parse, so an
+  unusually-formatted attribute (e.g. built by a macro) could be missed;
+  worst case that crate is silently skipped from `--all`/full-run target
+  *counts* only; `cargo test -p` is still always safe to run against it
+  either way.
+- Any `Cargo.toml` changing — the workspace root's or any single crate's —
+  forces a full run, since dependency/feature changes can ripple in ways
+  the resolved graph snapshot alone doesn't capture as a diff. `Cargo.lock`,
+  `build.rs`, `rust-toolchain(.toml)`, and `.cargo/config.toml` do too.
+- Building the graph requires `cargo` on `PATH`; it shells out to
+  `cargo metadata`, which (like `go list`) may need network access the
+  first time it resolves a new dependency.
+
 ## Roadmap
 
 This tracks the phased plan in the project design doc:
@@ -236,7 +280,7 @@ This tracks the phased plan in the project design doc:
 
 Language coverage grows incrementally alongside this. Candidates being
 considered next: Jest monorepo/workspace cross-package resolution, and
-Rust (Cargo).
+function-level (not just package/crate/file-level) impact analysis.
 
 ## License
 
