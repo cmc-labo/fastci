@@ -1,0 +1,5 @@
+{
+  "moduleNameMapper": {
+    "^@lib/(.*)$": "<rootDir>/src/$1"
+  }
+}

@@ -84,6 +84,44 @@ func TestBuildResolvesRelativeAndTsconfigAliasImports(t *testing.T) {
 	}
 }
 
+func TestBuildResolvesStaticDynamicImport(t *testing.T) {
+	dir := sampleJestDir(t)
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	dynleaf := filepath.Join(dir, "src", "dynleaf.ts")
+	dynconsumer := filepath.Join(dir, "src", "dynconsumer.ts")
+
+	if _, ok := g.Nodes[dynleaf]; !ok {
+		t.Fatalf("missing node for %s", dynleaf)
+	}
+	if !g.Nodes[dynconsumer].Imports[dynleaf] {
+		t.Error(`dynconsumer.ts should import dynleaf.ts via a static-argument dynamic import("./dynleaf")`)
+	}
+}
+
+func TestBuildResolvesModuleNameMapperAlias(t *testing.T) {
+	dir := sampleJestDir(t)
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	libthing := filepath.Join(dir, "src", "libthing.ts")
+	mapperconsumer := filepath.Join(dir, "src", "mapperconsumer.ts")
+
+	if _, ok := g.Nodes[libthing]; !ok {
+		t.Fatalf("missing node for %s", libthing)
+	}
+	if !g.Nodes[mapperconsumer].Imports[libthing] {
+		t.Error(`mapperconsumer.ts should import libthing.ts via the "@lib/*" moduleNameMapper alias in jest.config.json`)
+	}
+}
+
 func TestBuildIgnoresNodeModules(t *testing.T) {
 	dir := sampleJestDir(t)
 	a := jestanalyzer.New()

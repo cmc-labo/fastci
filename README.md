@@ -34,8 +34,12 @@ See [Roadmap](#roadmap) for what's next.
      way the Go toolchain itself would.
    - Jest: [`esbuild`](https://esbuild.github.io/)'s resolver, which
      understands relative imports, `tsconfig.json` `paths`/`baseUrl`
-     aliases, and extension/index resolution — the same way your bundler
-     would resolve them.
+     aliases, extension/index resolution, and `import()` calls with a
+     static string argument — the same way your bundler would resolve
+     them. A Jest `moduleNameMapper` config (from `jest.config.json` or
+     `package.json`'s `"jest"` field) is additionally applied through a
+     custom esbuild resolver plugin, so aliases defined only there (not in
+     `tsconfig.json`) are tracked too.
    - pytest: every `.py` file is parsed with Python's own `ast` module, and
      import targets (including relative imports like `from ..pkg import x`)
      are normalized with the stdlib's `importlib.util.resolve_name`, then
@@ -219,8 +223,21 @@ jobs:
   defaults.
 - `jest.config.js/.ts/.mjs/.cjs` (JS-computed config) isn't parsed for any
   purpose beyond "this file changing forces a full run"; only
-  `jest.config.json` and the `package.json` `"jest"` field are read.
+  `jest.config.json` and the `package.json` `"jest"` field are read. This
+  also means a `moduleNameMapper` defined only in a JS-computed config
+  (rather than `jest.config.json`) isn't picked up.
 - Ambient `.d.ts` files are ignored (no runtime effect on tests).
+- **Dynamic `import()` with a runtime-computed argument** (a variable, a
+  template literal built from one, a function call, etc.) can't be
+  resolved by esbuild or any other static tool — there's no way to know
+  which file it'll load without actually running the code. A change to
+  such a target file won't be attributed to whatever dynamically imports
+  it, and the graph simply won't have that edge; this is a fundamental
+  limit of static analysis, not something on the roadmap to fix. Dynamic
+  imports with a **static string literal** argument (`import("./foo")`,
+  including ones resolved through `tsconfig.json` paths or
+  `moduleNameMapper`) are fully tracked, same as a regular `import`
+  statement.
 
 **pytest**
 - Import resolution is entirely static (AST parsing + dotted-name matching

@@ -3,11 +3,18 @@
 //
 // Unlike Go, where "package" is a natural test-able unit, Jest tests at
 // file granularity, so every source file is its own graph.Node here.
-// Import edges (relative imports, tsconfig `paths`/`baseUrl` aliases, and
-// bare node_modules specifiers) are resolved by actually running them
-// through esbuild's real resolver rather than pattern-matching import
-// statements as strings - the same "delegate to the real toolchain"
-// approach goanalyzer uses via go/packages.
+// Import edges (relative imports, tsconfig `paths`/`baseUrl` aliases,
+// dynamic import() calls with a static string argument, and bare
+// node_modules specifiers) are resolved by actually running them through
+// esbuild's real resolver rather than pattern-matching import statements
+// as strings - the same "delegate to the real toolchain" approach
+// goanalyzer uses via go/packages. A Jest `moduleNameMapper` config (read
+// from jest.config.json or package.json's "jest" field) is additionally
+// applied via an esbuild resolver plugin, so aliases defined only there
+// (not in tsconfig) are tracked too. See the package doc for
+// modulenamemapper.go and the README for what's still out of reach: import
+// specifiers built from a runtime-computed (non-literal) expression can't
+// be resolved by any static tool, esbuild included.
 package jestanalyzer
 
 import (
@@ -159,7 +166,12 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		entryPoints[i] = filepath.ToSlash(rel)
 	}
 
-	result := api.Build(api.BuildOptions{
+	mapperEntries, err := loadModuleNameMapper(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := api.BuildOptions{
 		EntryPoints:   entryPoints,
 		Bundle:        true,
 		Metafile:      true,
@@ -169,7 +181,11 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		LogLevel:      api.LogLevelSilent,
 		AbsWorkingDir: dir,
 		Outdir:        ".fastci-metafile",
-	})
+	}
+	if len(mapperEntries) > 0 {
+		opts.Plugins = []api.Plugin{moduleNameMapperPlugin(dir, mapperEntries)}
+	}
+	result := api.Build(opts)
 	if len(result.Errors) > 0 {
 		msgs := make([]string, len(result.Errors))
 		for i, e := range result.Errors {

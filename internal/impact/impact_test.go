@@ -220,6 +220,37 @@ func TestComputeJestNonSourceFileIsIgnored(t *testing.T) {
 	}
 }
 
+func TestComputeJestDynamicImportImpact(t *testing.T) {
+	g, dir := loadSampleJestGraph(t)
+
+	// dynconsumer.ts reaches dynleaf.ts only through a static-argument
+	// dynamic import("./dynleaf"); that edge must still be honored.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "dynleaf.ts")}, jestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{filepath.Join(dir, "src", "dynconsumer.test.ts")}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeJestModuleNameMapperImpact(t *testing.T) {
+	g, dir := loadSampleJestGraph(t)
+
+	// mapperconsumer.ts reaches libthing.ts only through the "@lib/*"
+	// moduleNameMapper alias declared in jest.config.json (not present in
+	// tsconfig.json's paths); that edge must still be honored.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "libthing.ts")}, jestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{filepath.Join(dir, "src", "mapperconsumer.test.ts")}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
 func loadSamplePytestGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplepytest"))
