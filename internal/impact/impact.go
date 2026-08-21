@@ -24,6 +24,13 @@ type Result struct {
 	FullRun bool
 	// FullRunReasons lists the changed files that forced a full run.
 	FullRunReasons []string
+	// UncertainTargets is the sorted list of node IDs included in Targets
+	// because they (or something they statically import) has a dynamic
+	// import analysis couldn't resolve (graph.Node.HasDynamicImport) - not
+	// because they or anything they depend on literally changed. Disjoint
+	// from ChangedTargets and from any target already reachable through an
+	// actual change. Always empty when FullRun is true.
+	UncertainTargets []string
 }
 
 // Compute determines the set of test targets affected by changedFiles
@@ -65,6 +72,32 @@ func Compute(g *graph.Graph, changedFiles []string, a analyzer.Analyzer) Result 
 
 	affected := bfsReverse(g, changedTargets)
 
+	// Nodes whose static import graph is known-incomplete must be treated as
+	// possibly affected by *any* change, since we can't prove the changed
+	// file isn't their unresolved dynamic target. Run a second reverse-edge
+	// BFS seeded from those nodes - reusing bfsReverse unchanged, so
+	// anything that statically imports one inherits the uncertainty for
+	// free via the existing traversal - and union it into affected. Kept
+	// separate from the change-driven BFS above so a target already pulled
+	// in by a real change is reported as such, not as merely "uncertain".
+	uncertainSeeds := map[string]bool{}
+	for id, n := range g.Nodes {
+		if n.HasDynamicImport {
+			uncertainSeeds[id] = true
+		}
+	}
+	var uncertain []string
+	if len(uncertainSeeds) > 0 {
+		affectedByUncertainty := bfsReverse(g, uncertainSeeds)
+		for id := range affectedByUncertainty {
+			if n := g.Nodes[id]; n != nil && n.HasTestFiles && !affected[id] {
+				uncertain = append(uncertain, id)
+			}
+			affected[id] = true
+		}
+		sort.Strings(uncertain)
+	}
+
 	var targets []string
 	for t := range affected {
 		if n := g.Nodes[t]; n != nil && n.HasTestFiles {
@@ -74,8 +107,9 @@ func Compute(g *graph.Graph, changedFiles []string, a analyzer.Analyzer) Result 
 	sort.Strings(targets)
 
 	return Result{
-		Targets:        targets,
-		ChangedTargets: sortedKeys(changedTargets),
+		Targets:          targets,
+		ChangedTargets:   sortedKeys(changedTargets),
+		UncertainTargets: uncertain,
 	}
 }
 

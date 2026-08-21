@@ -13,13 +13,15 @@ walking the directory tree ourselves. Relative imports (`from . import x`,
 stdlib's own `importlib.util.resolve_name`, which is pure string logic and
 does not import anything either.
 
-Known limitations (by design, to stay static): dynamic imports
-(`importlib.import_module(...)`, `__import__`, plugin/entry-point style
-loading) and star re-exports that obscure a symbol's true origin aren't
-tracked. An import that can't be resolved to a project file (stdlib,
-third-party, or something dynamic) is simply treated as external and
-omitted - the caller falls back to a full test run for changes it can't
-attribute anywhere else, same as an unresolvable Go or JS/TS file.
+Known limitations (by design, to stay static): a call to
+`importlib.import_module(...)` or `__import__(...)` is *detected* - the
+containing file is flagged "dynamic": true in the output regardless of
+whether the call's argument happens to be a literal - but its target isn't
+resolved to a specific edge, so the caller (pytestanalyzer.go) treats the
+whole file as always possibly affected rather than trying to attribute
+individual changes to it. Plugin/entry-point style loading through some
+other indirection, and star re-exports that obscure a symbol's true origin,
+aren't detected at all.
 """
 
 import ast
@@ -123,10 +125,11 @@ def main():
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 tree = ast.parse(fh.read(), filename=f)
         except SyntaxError:
-            result_files[relkey(f)] = {"imports": []}
+            result_files[relkey(f)] = {"imports": [], "dynamic": False}
             continue
 
         targets = []
+        dynamic = False
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -140,6 +143,16 @@ def main():
                         pass
                 elif node.module:
                     targets.append(node.module)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                # importlib.import_module(...) / import_module(...) (however
+                # imported) and bare/builtins.__import__(...) - the argument
+                # isn't inspected, even a literal is treated as dynamic; see
+                # the module docstring for why.
+                if isinstance(func, ast.Name) and func.id in ("__import__", "import_module"):
+                    dynamic = True
+                elif isinstance(func, ast.Attribute) and func.attr in ("import_module", "__import__"):
+                    dynamic = True
 
         imports = []
         seen = set()
@@ -149,7 +162,7 @@ def main():
                 seen.add(rp)
                 imports.append(relkey(rp))
 
-        result_files[relkey(f)] = {"imports": imports}
+        result_files[relkey(f)] = {"imports": imports, "dynamic": dynamic}
 
     json.dump({"files": result_files}, sys.stdout)
 

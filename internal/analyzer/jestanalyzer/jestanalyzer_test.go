@@ -16,6 +16,15 @@ func sampleJestDir(t *testing.T) string {
 	return dir
 }
 
+func sampleDir(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestDetect(t *testing.T) {
 	a := jestanalyzer.New()
 	ok, err := a.Detect(sampleJestDir(t))
@@ -119,6 +128,86 @@ func TestBuildResolvesModuleNameMapperAlias(t *testing.T) {
 	}
 	if !g.Nodes[mapperconsumer].Imports[libthing] {
 		t.Error(`mapperconsumer.ts should import libthing.ts via the "@lib/*" moduleNameMapper alias in jest.config.json`)
+	}
+}
+
+func TestBuildFlagsOpaqueDynamicImport(t *testing.T) {
+	dir := sampleDir(t, "samplejestdynamic")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	opaque := filepath.Join(dir, "src", "opaque.ts")
+	if _, ok := g.Nodes[opaque]; !ok {
+		t.Fatalf("missing node for %s", opaque)
+	}
+	if !g.Nodes[opaque].HasDynamicImport {
+		t.Error("opaque.ts should be flagged HasDynamicImport (import(pickModule()) can't be resolved statically)")
+	}
+}
+
+func TestBuildResolvesTemplateGlobToRealEdges(t *testing.T) {
+	dir := sampleDir(t, "samplejestdynamic")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	globhit := filepath.Join(dir, "src", "globhit.ts")
+	pluginA := filepath.Join(dir, "src", "plugins", "a.ts")
+	pluginB := filepath.Join(dir, "src", "plugins", "b.ts")
+
+	n, ok := g.Nodes[globhit]
+	if !ok {
+		t.Fatalf("missing node for %s", globhit)
+	}
+	if !n.Imports[pluginA] {
+		t.Error(`globhit.ts should import plugins/a.ts via the resolved import(` + "`./plugins/${name}`" + `) directory prefix`)
+	}
+	if !n.Imports[pluginB] {
+		t.Error(`globhit.ts should import plugins/b.ts via the resolved import(` + "`./plugins/${name}`" + `) directory prefix`)
+	}
+	if n.HasDynamicImport {
+		t.Error("globhit.ts should not be HasDynamicImport once real edges were found for its glob")
+	}
+}
+
+func TestBuildUnrelatedNodeUnaffectedByDynamicImports(t *testing.T) {
+	dir := sampleDir(t, "samplejestdynamic")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	unrelated := filepath.Join(dir, "src", "unrelated.ts")
+	n, ok := g.Nodes[unrelated]
+	if !ok {
+		t.Fatalf("missing node for %s", unrelated)
+	}
+	if n.HasDynamicImport {
+		t.Error("unrelated.ts has no dynamic import of its own and should not be flagged HasDynamicImport")
+	}
+}
+
+func TestBuildDoesNotFailOnUnresolvableGlobImport(t *testing.T) {
+	dir := sampleDir(t, "samplejestglobmiss")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build should not fail when a template-literal dynamic import's directory doesn't exist: %v", err)
+	}
+
+	broken := filepath.Join(dir, "src", "broken.ts")
+	n, ok := g.Nodes[broken]
+	if !ok {
+		t.Fatalf("missing node for %s", broken)
+	}
+	if !n.HasDynamicImport {
+		t.Error("broken.ts should be flagged HasDynamicImport since its glob prefix matched no files")
 	}
 }
 

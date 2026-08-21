@@ -251,6 +251,60 @@ func TestComputeJestModuleNameMapperImpact(t *testing.T) {
 	}
 }
 
+func loadSampleJestDynamicGraph(t *testing.T) (*graph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplejestdynamic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := jestAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputeJestOpaqueDynamicImportAlwaysIncluded(t *testing.T) {
+	g, dir := loadSampleJestDynamicGraph(t)
+
+	// unrelated.ts has no relation to opaque.ts's import(pickModule()), but
+	// opaque.test.ts must still run - fastci can't prove the change isn't
+	// pickModule()'s runtime target.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "unrelated.ts")}, jestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	wantTargets := []string{
+		filepath.Join(dir, "src", "opaque.test.ts"),
+		filepath.Join(dir, "src", "unrelated.test.ts"),
+	}
+	if !reflect.DeepEqual(res.Targets, wantTargets) {
+		t.Errorf("Targets = %v, want %v", res.Targets, wantTargets)
+	}
+	wantChanged := []string{filepath.Join(dir, "src", "unrelated.ts")}
+	if !reflect.DeepEqual(res.ChangedTargets, wantChanged) {
+		t.Errorf("ChangedTargets = %v, want %v", res.ChangedTargets, wantChanged)
+	}
+	wantUncertain := []string{filepath.Join(dir, "src", "opaque.test.ts")}
+	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
+		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
+	}
+}
+
+func TestComputeJestResolvedGlobDoesNotForceInclusion(t *testing.T) {
+	g, dir := loadSampleJestDynamicGraph(t)
+
+	// globhit.ts's `./plugins/${name}` resolved to real edges (both plugin
+	// files exist), so it's not HasDynamicImport - changing unrelated.ts
+	// must not pull globhit.test.ts in.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "unrelated.ts")}, jestAnalyzer)
+	for _, target := range res.Targets {
+		if target == filepath.Join(dir, "src", "globhit.test.ts") {
+			t.Error("globhit.test.ts should not be selected - its dynamic import resolved to real edges, not uncertainty")
+		}
+	}
+}
+
 func loadSamplePytestGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplepytest"))
@@ -332,6 +386,136 @@ func TestComputePytestNonSourceFileIsIgnored(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.Targets, want) {
 		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func loadSamplePytestDynamicGraph(t *testing.T) (*graph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplepytestdynamic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := pytestAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputePytestDynamicImportPropagatesThroughStaticImporter(t *testing.T) {
+	g, dir := loadSamplePytestDynamicGraph(t)
+
+	// unrelated.py has no relation to dynloader.py's
+	// importlib.import_module(name), but both test_dynloader.py (which
+	// imports dynloader.py directly) and test_plainconsumer.py (which
+	// imports plainconsumer.py, a static importer of dynloader.py) must
+	// still run.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "mypkg", "unrelated.py")}, pytestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	wantTargets := []string{
+		filepath.Join(dir, "tests", "test_dynloader.py"),
+		filepath.Join(dir, "tests", "test_plainconsumer.py"),
+		filepath.Join(dir, "tests", "test_unrelated.py"),
+	}
+	if !reflect.DeepEqual(res.Targets, wantTargets) {
+		t.Errorf("Targets = %v, want %v", res.Targets, wantTargets)
+	}
+	// ChangedTargets reports the changed node itself (unrelated.py, the file
+	// that was actually edited) - not the test file that covers it; it has
+	// no test files of its own, so it doesn't appear in Targets.
+	wantChanged := []string{filepath.Join(dir, "src", "mypkg", "unrelated.py")}
+	if !reflect.DeepEqual(res.ChangedTargets, wantChanged) {
+		t.Errorf("ChangedTargets = %v, want %v", res.ChangedTargets, wantChanged)
+	}
+	wantUncertain := []string{
+		filepath.Join(dir, "tests", "test_dynloader.py"),
+		filepath.Join(dir, "tests", "test_plainconsumer.py"),
+	}
+	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
+		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
+	}
+}
+
+// buildHandGraph constructs a graph.Graph directly (no analyzer Build())
+// for tests that only need to exercise Compute's own logic, independent of
+// any language's import resolution: two unrelated nodes x and y, x flagged
+// HasDynamicImport, both with test files.
+func buildHandGraph(t *testing.T) (g *graph.Graph, yFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	xFile := filepath.Join(dir, "x.go")
+	xTestFile := filepath.Join(dir, "x_test.go")
+	yFile = filepath.Join(dir, "y.go")
+	yTestFile := filepath.Join(dir, "y_test.go")
+
+	g = graph.New()
+	x := g.Node("x")
+	x.Files = []string{xFile, xTestFile}
+	x.HasTestFiles = true
+	x.HasDynamicImport = true
+
+	y := g.Node("y")
+	y.Files = []string{yFile, yTestFile}
+	y.HasTestFiles = true
+
+	g.IndexFiles()
+	g.BuildImporters()
+	return g, yFile
+}
+
+func TestComputeDynamicImportNodeAlwaysIncluded(t *testing.T) {
+	g, yFile := buildHandGraph(t)
+
+	// x has no static relationship to y at all; changing y must still pull
+	// x in as "uncertain", since x's own dynamic import might resolve to y
+	// at runtime.
+	res := impact.Compute(g, []string{yFile}, goAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	wantTargets := []string{"x", "y"}
+	if !reflect.DeepEqual(res.Targets, wantTargets) {
+		t.Errorf("Targets = %v, want %v", res.Targets, wantTargets)
+	}
+	wantChanged := []string{"y"}
+	if !reflect.DeepEqual(res.ChangedTargets, wantChanged) {
+		t.Errorf("ChangedTargets = %v, want %v", res.ChangedTargets, wantChanged)
+	}
+	wantUncertain := []string{"x"}
+	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
+		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
+	}
+}
+
+func TestComputeWithNoDynamicImportNodesMatchesPreExistingBehavior(t *testing.T) {
+	dir := t.TempDir()
+	aFile := filepath.Join(dir, "a.go")
+	aTestFile := filepath.Join(dir, "a_test.go")
+	bFile := filepath.Join(dir, "b.go")
+	bTestFile := filepath.Join(dir, "b_test.go")
+
+	g := graph.New()
+	a := g.Node("a")
+	a.Files = []string{aFile, aTestFile}
+	a.HasTestFiles = true
+	b := g.Node("b")
+	b.Files = []string{bFile, bTestFile}
+	b.HasTestFiles = true
+	g.IndexFiles()
+	g.BuildImporters()
+
+	res := impact.Compute(g, []string{bFile}, goAnalyzer)
+	wantTargets := []string{"b"}
+	if !reflect.DeepEqual(res.Targets, wantTargets) {
+		t.Errorf("Targets = %v, want %v", res.Targets, wantTargets)
+	}
+	if !reflect.DeepEqual(res.ChangedTargets, wantTargets) {
+		t.Errorf("ChangedTargets = %v, want %v", res.ChangedTargets, wantTargets)
+	}
+	if len(res.UncertainTargets) != 0 {
+		t.Errorf("UncertainTargets = %v, want empty", res.UncertainTargets)
 	}
 }
 

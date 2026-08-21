@@ -162,10 +162,20 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 	for _, t := range result.ChangedTargets {
 		changedSet[t] = true
 	}
+	uncertainSet := make(map[string]bool, len(result.UncertainTargets))
+	for _, t := range result.UncertainTargets {
+		uncertainSet[t] = true
+	}
+	if len(result.UncertainTargets) > 0 {
+		fmt.Printf("fastci: %d target(s) below (marked ~) contain an import fastci can't statically resolve, so they're always run as a safety net rather than only when something they depend on changed. Converting to a static import (or a moduleNameMapper/tsconfig alias, for Jest) regains precision.\n", len(result.UncertainTargets))
+	}
 	for _, t := range result.Targets {
 		marker := " "
-		if changedSet[t] {
+		switch {
+		case changedSet[t]:
 			marker = "*"
+		case uncertainSet[t]:
+			marker = "~"
 		}
 		fmt.Printf("  %s %s\n", marker, relOrSelf(repoRoot, t))
 	}

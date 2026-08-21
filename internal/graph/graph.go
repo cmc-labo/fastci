@@ -16,7 +16,14 @@ type Node struct {
 	ID           string
 	Files        []string
 	HasTestFiles bool
-	Imports      map[string]bool // IDs of other Nodes this one depends on
+	// HasDynamicImport marks a node whose true import set isn't fully
+	// captured by Imports - e.g. a dynamic import()/require() call or
+	// importlib.import_module() whose target can't be resolved statically.
+	// Some change elsewhere in the project might affect this node in a way
+	// the graph can't see, so impact analysis treats it as always possibly
+	// affected rather than silently ignoring the gap.
+	HasDynamicImport bool
+	Imports          map[string]bool // IDs of other Nodes this one depends on
 }
 
 // Graph is a full dependency graph produced by an analyzer.

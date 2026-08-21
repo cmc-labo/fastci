@@ -171,6 +171,11 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		return nil, err
 	}
 
+	opaqueFiles, rewrites, templateCallsByFile, err := scanFilesForDynamicImports(files)
+	if err != nil {
+		return nil, err
+	}
+
 	opts := api.BuildOptions{
 		EntryPoints:   entryPoints,
 		Bundle:        true,
@@ -183,7 +188,10 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		Outdir:        ".fastci-metafile",
 	}
 	if len(mapperEntries) > 0 {
-		opts.Plugins = []api.Plugin{moduleNameMapperPlugin(dir, mapperEntries)}
+		opts.Plugins = append(opts.Plugins, moduleNameMapperPlugin(dir, mapperEntries))
+	}
+	if len(rewrites) > 0 {
+		opts.Plugins = append(opts.Plugins, dynamicImportNeutralizerPlugin(rewrites))
 	}
 	result := api.Build(opts)
 	if len(result.Errors) > 0 {
@@ -219,6 +227,30 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 				continue
 			}
 			n.Imports[impAbs] = true
+		}
+	}
+
+	// Apply the dynamic-import safety net: opaque calls mark their node as
+	// always possibly affected, and template calls with a static directory
+	// prefix get real edges to every file under that directory (a safe
+	// superset - esbuild itself never sees these calls, see dynamicimport.go).
+	for absFile := range opaqueFiles {
+		g.Node(absFile).HasDynamicImport = true
+	}
+	for absFile, calls := range templateCallsByFile {
+		n := g.Node(absFile)
+		matched := false
+		for _, call := range calls {
+			dirPrefix := templatePrefixDir(absFile, call.StaticPrefix) + string(filepath.Separator)
+			for _, f := range files {
+				if f != absFile && strings.HasPrefix(f, dirPrefix) {
+					n.Imports[f] = true
+					matched = true
+				}
+			}
+		}
+		if !matched {
+			n.HasDynamicImport = true
 		}
 	}
 

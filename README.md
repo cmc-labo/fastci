@@ -148,8 +148,12 @@ fastci: selected 3/4 test target(s) (cargo, 25% skipped)
 fastci: dry-run, not executing tests
 ```
 
-Lines marked `*` are packages/files that changed directly; unmarked lines
-are pulled in transitively because they depend on something that changed.
+Lines marked `*` are packages/files that changed directly; lines marked `~`
+contain an import fastci can't statically resolve (see the Jest/pytest
+dynamic-import notes under [Current limitations](#current-limitations)) and
+are always included as a safety net; unmarked lines are pulled in
+transitively because they depend on something that changed (directly, or
+via a `~` line).
 
 ## GitHub Actions
 
@@ -227,27 +231,40 @@ jobs:
   also means a `moduleNameMapper` defined only in a JS-computed config
   (rather than `jest.config.json`) isn't picked up.
 - Ambient `.d.ts` files are ignored (no runtime effect on tests).
-- **Dynamic `import()` with a runtime-computed argument** (a variable, a
-  template literal built from one, a function call, etc.) can't be
-  resolved by esbuild or any other static tool — there's no way to know
-  which file it'll load without actually running the code. A change to
-  such a target file won't be attributed to whatever dynamically imports
-  it, and the graph simply won't have that edge; this is a fundamental
-  limit of static analysis, not something on the roadmap to fix. Dynamic
-  imports with a **static string literal** argument (`import("./foo")`,
-  including ones resolved through `tsconfig.json` paths or
-  `moduleNameMapper`) are fully tracked, same as a regular `import`
-  statement.
+- **Dynamic `import()`/`require()` with a runtime-computed argument** (a
+  variable, a function call, string concatenation, etc.) can't be resolved
+  by esbuild or any other static tool — there's no way to know which file
+  it'll load without actually running the code. fastci detects these call
+  sites with a lightweight source scan and marks the containing file `~`
+  (see the output legend above): it's always included in the selected test
+  set whenever *anything* in the project changes, rather than only when
+  something it statically depends on changed, trading away some of the "%
+  skipped" narrowing for soundness. A template-literal argument with a
+  static directory prefix (`` import(`./plugins/${name}`) ``) is a special
+  case: if that directory exists, fastci resolves it to real edges against
+  every file under it (a safe superset, since the exact match can't be
+  known without running the code) instead of marking the file `~`; if the
+  directory doesn't exist, the file is marked `~` and the build no longer
+  fails outright (an earlier limitation). Dynamic imports with a **static
+  string literal** argument (`import("./foo")`, including ones resolved
+  through `tsconfig.json` paths or `moduleNameMapper`) are fully tracked,
+  same as a regular `import` statement, and never marked `~`.
 
 **pytest**
 - Import resolution is entirely static (AST parsing + dotted-name matching
   against files discovered on disk) and never imports the project's own
   code, unlike a naive `importlib.util.find_spec` approach — this avoids
   executing arbitrary `__init__.py` side effects or requiring dependencies
-  to be installed just to build the graph, but it means **dynamic imports**
-  (`importlib.import_module(...)` with a computed name, `__import__`,
-  plugin/entry-point style loading) and symbols re-exported through a
-  package's `__init__.py` from somewhere non-obvious aren't tracked.
+  to be installed just to build the graph. **Dynamic imports**
+  (`importlib.import_module(...)`, bare `__import__(...)`) are detected —
+  the argument isn't inspected, even a literal is treated the same as a
+  computed one — and the containing file is marked `~` (see the output
+  legend above): it's always included in the selected test set whenever
+  anything in the project changes, same safety-net semantics as Jest's
+  dynamic `import()` handling, rather than trying to resolve the call's
+  actual target. Plugin/entry-point style loading through some other
+  indirection, and symbols re-exported through a package's `__init__.py`
+  from somewhere non-obvious, aren't detected at all.
 - Source roots are the project directory and, if present, a top-level
   `src/` directory (covering both flat and `src` layouts). Other custom
   layouts (e.g. a `package_dir` remapping in `setup.cfg`) aren't read.

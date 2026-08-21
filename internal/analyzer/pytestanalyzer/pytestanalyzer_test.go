@@ -42,6 +42,46 @@ func TestDetectRejectsNonPytestDir(t *testing.T) {
 	}
 }
 
+func samplePytestDynamicDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "samplepytestdynamic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestBuildFlagsDynamicImportModule(t *testing.T) {
+	dir := samplePytestDynamicDir(t)
+	a := pytestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	dynloader := filepath.Join(dir, "src", "mypkg", "dynloader.py")
+	plainconsumer := filepath.Join(dir, "src", "mypkg", "plainconsumer.py")
+	unrelated := filepath.Join(dir, "src", "mypkg", "unrelated.py")
+
+	n, ok := g.Nodes[dynloader]
+	if !ok {
+		t.Fatalf("missing node for %s", dynloader)
+	}
+	if !n.HasDynamicImport {
+		t.Error("dynloader.py should be flagged HasDynamicImport (importlib.import_module(name) can't be resolved statically)")
+	}
+
+	if !g.Nodes[plainconsumer].Imports[dynloader] {
+		t.Error("plainconsumer.py should statically import dynloader.py (from mypkg import dynloader)")
+	}
+	if g.Nodes[plainconsumer].HasDynamicImport {
+		t.Error("plainconsumer.py has no dynamic import of its own and should not be flagged HasDynamicImport")
+	}
+	if g.Nodes[unrelated].HasDynamicImport {
+		t.Error("unrelated.py has no dynamic import of its own and should not be flagged HasDynamicImport")
+	}
+}
+
 func TestBuildResolvesRelativeAndAbsoluteImports(t *testing.T) {
 	dir := samplePytestDir(t)
 	a := pytestanalyzer.New()

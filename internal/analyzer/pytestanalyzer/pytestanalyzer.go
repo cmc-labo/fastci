@@ -80,6 +80,7 @@ func containsToken(path, token string) bool {
 type resolverOutput struct {
 	Files map[string]struct {
 		Imports []string `json:"imports"`
+		Dynamic bool     `json:"dynamic"`
 	} `json:"files"`
 }
 
@@ -122,6 +123,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		n.Files = []string{abs}
 		if isTestFile(abs) {
 			n.HasTestFiles = true
+		}
+		if entry.Dynamic {
+			n.HasDynamicImport = true
 		}
 		for _, imp := range entry.Imports {
 			impAbs := toAbs(imp)
