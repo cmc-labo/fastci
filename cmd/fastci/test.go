@@ -167,7 +167,11 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		uncertainSet[t] = true
 	}
 	if len(result.UncertainTargets) > 0 {
-		fmt.Printf("fastci: %d target(s) below (marked ~) contain an import fastci can't statically resolve, so they're always run as a safety net rather than only when something they depend on changed. Converting to a static import (or a moduleNameMapper/tsconfig alias, for Jest) regains precision.\n", len(result.UncertainTargets))
+		hint := "Converting it to a statically-resolvable import regains precision."
+		if a.Name() == "jest" {
+			hint = "Converting it to a static import (or a moduleNameMapper/tsconfig alias) regains precision."
+		}
+		fmt.Printf("fastci: %d target(s) below (marked ~) contain an import fastci can't statically resolve, so they're always run as a safety net rather than only when something they depend on changed. %s\n", len(result.UncertainTargets), hint)
 	}
 	for _, t := range result.Targets {
 		marker := " "
