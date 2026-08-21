@@ -347,9 +347,9 @@ func scanFilesForDynamicImports(files []string) (opaqueFiles map[string]bool, re
 	templateCallsByFile = map[string][]templateCall{}
 
 	for _, f := range files {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("jestanalyzer: reading %s: %w", f, err)
+		src, readErr := os.ReadFile(f)
+		if readErr != nil {
+			return nil, nil, nil, fmt.Errorf("jestanalyzer: reading %s: %w", f, readErr)
 		}
 		scan := scanDynamicImportSites(src)
 		if scan.Opaque {
