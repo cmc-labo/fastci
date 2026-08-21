@@ -75,17 +75,8 @@ func scanDynamicImportSites(src []byte) dynamicImportScan {
 	for i := 0; i < n; {
 		c := src[i]
 		switch {
-		case c == '/' && i+1 < n && src[i+1] == '/':
-			i += 2
-			for i < n && src[i] != '\n' {
-				i++
-			}
-		case c == '/' && i+1 < n && src[i+1] == '*':
-			i += 2
-			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
-				i++
-			}
-			i = min(i+2, n)
+		case c == '/' && i+1 < n && (src[i+1] == '/' || src[i+1] == '*'):
+			i = skipComment(src, i)
 		case c == '\'' || c == '"':
 			i = scanStringLiteral(src, i)
 		case c == '`':
@@ -230,17 +221,8 @@ func skipInterpolation(src []byte, start int) int {
 	for i < n {
 		c := src[i]
 		switch {
-		case c == '/' && i+1 < n && src[i+1] == '/':
-			i += 2
-			for i < n && src[i] != '\n' {
-				i++
-			}
-		case c == '/' && i+1 < n && src[i+1] == '*':
-			i += 2
-			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
-				i++
-			}
-			i = min(i+2, n)
+		case c == '/' && i+1 < n && (src[i+1] == '/' || src[i+1] == '*'):
+			i = skipComment(src, i)
 		case c == '\'' || c == '"':
 			i = scanStringLiteral(src, i)
 		case c == '`':
@@ -260,6 +242,25 @@ func skipInterpolation(src []byte, start int) int {
 		}
 	}
 	return n
+}
+
+// skipComment returns the index just past the line or block comment
+// starting at src[i]. Callers must first check the precondition themselves:
+// src[i] == '/' and src[i+1] is '/' or '*'.
+func skipComment(src []byte, i int) int {
+	n := len(src)
+	if src[i+1] == '/' {
+		i += 2
+		for i < n && src[i] != '\n' {
+			i++
+		}
+		return i
+	}
+	i += 2
+	for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
+		i++
+	}
+	return min(i+2, n)
 }
 
 func isFollowedByCloseParen(src []byte, i int) bool {
