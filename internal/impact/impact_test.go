@@ -323,13 +323,16 @@ func TestComputePytestTransitiveImpactThroughRelativeImports(t *testing.T) {
 
 	// leaf.py <- mid.py (`from .leaf import hello`) <- sub/consumer.py
 	// (`from ..mid import greet`, crossing a package boundary) <-
-	// test_consumer.py. test_leaf.py and test_mid.py also import their
-	// respective modules directly. test_isolated.py must NOT be selected.
+	// test_consumer.py; leaf.py <- bareimporter.py (`from . import leaf`)
+	// <- test_bareimporter.py. test_leaf.py and test_mid.py also import
+	// their respective modules directly. test_isolated.py must NOT be
+	// selected.
 	res := impact.Compute(g, []string{filepath.Join(dir, "src", "mypkg", "leaf.py")}, pytestAnalyzer)
 	if res.FullRun {
 		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
 	}
 	want := []string{
+		filepath.Join(dir, "tests", "test_bareimporter.py"),
 		filepath.Join(dir, "tests", "test_consumer.py"),
 		filepath.Join(dir, "tests", "test_leaf.py"),
 		filepath.Join(dir, "tests", "test_mid.py"),
@@ -380,6 +383,7 @@ func TestComputePytestNonSourceFileIsIgnored(t *testing.T) {
 		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
 	}
 	want := []string{
+		filepath.Join(dir, "tests", "test_bareimporter.py"),
 		filepath.Join(dir, "tests", "test_consumer.py"),
 		filepath.Join(dir, "tests", "test_leaf.py"),
 		filepath.Join(dir, "tests", "test_mid.py"),

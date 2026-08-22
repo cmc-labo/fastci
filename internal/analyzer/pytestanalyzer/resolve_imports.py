@@ -135,14 +135,25 @@ def main():
                 for alias in node.names:
                     targets.append(alias.name)
             elif isinstance(node, ast.ImportFrom):
+                base = None
                 if node.level and node.level > 0:
                     spec = "." * node.level + (node.module or "")
                     try:
-                        targets.append(importlib.util.resolve_name(spec, package))
+                        base = importlib.util.resolve_name(spec, package)
                     except (ImportError, ValueError):
                         pass
                 elif node.module:
-                    targets.append(node.module)
+                    base = node.module
+                if base:
+                    targets.append(base)
+                    # `from pkg import name` is ambiguous from the AST alone:
+                    # name may be a submodule (pkg/name.py) or just a symbol
+                    # defined in pkg's __init__.py. Also try it as a
+                    # submodule - if it isn't one, resolve_target simply
+                    # won't find it in the registry, so this only ever adds
+                    # a real edge, never a wrong one.
+                    for alias in node.names:
+                        targets.append(base + "." + alias.name)
             elif isinstance(node, ast.Call):
                 func = node.func
                 # importlib.import_module(...) / import_module(...) (however

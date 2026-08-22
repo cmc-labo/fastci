@@ -94,11 +94,12 @@ func TestBuildResolvesRelativeAndAbsoluteImports(t *testing.T) {
 	mid := filepath.Join(dir, "src", "mypkg", "mid.py")
 	consumer := filepath.Join(dir, "src", "mypkg", "sub", "consumer.py")
 	testutil := filepath.Join(dir, "src", "mypkg", "testutil.py")
+	bareImporter := filepath.Join(dir, "src", "mypkg", "bareimporter.py")
 	testLeaf := filepath.Join(dir, "tests", "test_leaf.py")
 	testMid := filepath.Join(dir, "tests", "test_mid.py")
 	testConsumer := filepath.Join(dir, "tests", "test_consumer.py")
 
-	for _, f := range []string{leaf, mid, consumer, testutil, testLeaf, testMid, testConsumer} {
+	for _, f := range []string{leaf, mid, consumer, testutil, bareImporter, testLeaf, testMid, testConsumer} {
 		if _, ok := g.Nodes[f]; !ok {
 			t.Errorf("missing node for %s", f)
 		}
@@ -118,6 +119,9 @@ func TestBuildResolvesRelativeAndAbsoluteImports(t *testing.T) {
 	}
 	if !g.Nodes[testConsumer].Imports[consumer] {
 		t.Error("test_consumer.py should import sub/consumer.py")
+	}
+	if !g.Nodes[bareImporter].Imports[leaf] {
+		t.Error("bareimporter.py should import leaf.py (bare relative import `from . import leaf`)")
 	}
 
 	for _, f := range []string{testLeaf, testMid, testConsumer} {
