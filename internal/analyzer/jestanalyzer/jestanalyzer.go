@@ -239,17 +239,21 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	}
 	for absFile, calls := range templateCallsByFile {
 		n := g.Node(absFile)
-		matched := false
+		anyUnmatched := false
 		for _, call := range calls {
 			dirPrefix := templatePrefixDir(absFile, call.StaticPrefix) + string(filepath.Separator)
+			matched := false
 			for _, f := range files {
 				if f != absFile && strings.HasPrefix(f, dirPrefix) {
 					n.Imports[f] = true
 					matched = true
 				}
 			}
+			if !matched {
+				anyUnmatched = true
+			}
 		}
-		if !matched {
+		if anyUnmatched {
 			n.HasDynamicImport = true
 		}
 	}

@@ -269,12 +269,15 @@ func TestComputeJestOpaqueDynamicImportAlwaysIncluded(t *testing.T) {
 
 	// unrelated.ts has no relation to opaque.ts's import(pickModule()), but
 	// opaque.test.ts must still run - fastci can't prove the change isn't
-	// pickModule()'s runtime target.
+	// pickModule()'s runtime target. mixedglob.test.ts must run too: its
+	// import(`./missingdir/${name}`) matched no files, so it's uncertain
+	// as well, even though its other call (`./plugins/${name}`) resolved.
 	res := impact.Compute(g, []string{filepath.Join(dir, "src", "unrelated.ts")}, jestAnalyzer)
 	if res.FullRun {
 		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
 	}
 	wantTargets := []string{
+		filepath.Join(dir, "src", "mixedglob.test.ts"),
 		filepath.Join(dir, "src", "opaque.test.ts"),
 		filepath.Join(dir, "src", "unrelated.test.ts"),
 	}
@@ -285,7 +288,10 @@ func TestComputeJestOpaqueDynamicImportAlwaysIncluded(t *testing.T) {
 	if !reflect.DeepEqual(res.ChangedTargets, wantChanged) {
 		t.Errorf("ChangedTargets = %v, want %v", res.ChangedTargets, wantChanged)
 	}
-	wantUncertain := []string{filepath.Join(dir, "src", "opaque.test.ts")}
+	wantUncertain := []string{
+		filepath.Join(dir, "src", "mixedglob.test.ts"),
+		filepath.Join(dir, "src", "opaque.test.ts"),
+	}
 	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
 		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
 	}

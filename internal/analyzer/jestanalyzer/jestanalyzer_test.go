@@ -211,6 +211,30 @@ func TestBuildDoesNotFailOnUnresolvableGlobImport(t *testing.T) {
 	}
 }
 
+func TestBuildFlagsUnmatchedTemplateCallEvenAlongsideAResolvedOne(t *testing.T) {
+	dir := sampleDir(t, "samplejestdynamic")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	mixedglob := filepath.Join(dir, "src", "mixedglob.ts")
+	pluginA := filepath.Join(dir, "src", "plugins", "a.ts")
+	pluginB := filepath.Join(dir, "src", "plugins", "b.ts")
+
+	n, ok := g.Nodes[mixedglob]
+	if !ok {
+		t.Fatalf("missing node for %s", mixedglob)
+	}
+	if !n.Imports[pluginA] || !n.Imports[pluginB] {
+		t.Error("mixedglob.ts should still get real edges for its resolved import(`./plugins/${name}`) call")
+	}
+	if !n.HasDynamicImport {
+		t.Error("mixedglob.ts should be flagged HasDynamicImport: its second call, import(`./missingdir/${name}`), matched no files, and that must not be masked by the first call resolving fine")
+	}
+}
+
 func TestBuildIgnoresNodeModules(t *testing.T) {
 	dir := sampleJestDir(t)
 	a := jestanalyzer.New()
