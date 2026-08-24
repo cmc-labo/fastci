@@ -13,6 +13,7 @@ out of the way otherwise.
 This is an early, incrementally-developed project. Today it covers:
 
 - **Go** (`go test`) — package-level, module or [workspace](https://go.dev/ref/mod#workspaces)
+- **TypeScript/JavaScript with Vitest** — file-level
 - **TypeScript/JavaScript with Jest** — file-level
 - **Python with pytest** — file-level
 - **Rust with Cargo** — crate-level, single crate or [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
@@ -22,24 +23,26 @@ See [Roadmap](#roadmap) for what's next.
 ## How it works
 
 1. `fastci test` auto-detects the project type in the working directory
-   (Go module/workspace, a Jest-configured `package.json`, a
-   pytest-configured Python project, or a Rust crate/Cargo workspace) and
-   resolves the files changed in your working tree (or, with `--base`, the
-   files changed between a base ref and `HEAD`).
+   (Go module/workspace, a Vitest-configured project, a Jest-configured
+   `package.json`, a pytest-configured Python project, or a Rust
+   crate/Cargo workspace) and resolves the files changed in your working
+   tree (or, with `--base`, the files changed between a base ref and
+   `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
    regex/string matching over import statements:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
      (backed by `go list`), which resolves module paths, `internal/`
      visibility, `replace` directives, and `go.work` workspaces exactly the
      way the Go toolchain itself would.
-   - Jest: [`esbuild`](https://esbuild.github.io/)'s resolver, which
-     understands relative imports, `tsconfig.json` `paths`/`baseUrl`
+   - Vitest and Jest: [`esbuild`](https://esbuild.github.io/)'s resolver,
+     which understands relative imports, `tsconfig.json` `paths`/`baseUrl`
      aliases, extension/index resolution, and `import()` calls with a
      static string argument — the same way your bundler would resolve
      them. A Jest `moduleNameMapper` config (from `jest.config.json` or
      `package.json`'s `"jest"` field) is additionally applied through a
      custom esbuild resolver plugin, so aliases defined only there (not in
-     `tsconfig.json`) are tracked too.
+     `tsconfig.json`) are tracked too; Vitest has no equivalent yet — see
+     [Current limitations](#current-limitations).
    - pytest: every `.py` file is parsed with Python's own `ast` module, and
      import targets (including relative imports like `from ..pkg import x`)
      are normalized with the stdlib's `importlib.util.resolve_name`, then
@@ -70,8 +73,9 @@ go install github.com/hpscript/fastci/cmd/fastci@latest
 ## Usage
 
 Run from the project root — a Go module (`go.mod`), a Go workspace
-(`go.work`), a Jest project (`package.json` with Jest configured), a
-pytest project (`pytest.ini`, `conftest.py`, or a
+(`go.work`), a Vitest project (`vitest.config.*` or a `vitest` dependency),
+a Jest project (`package.json` with Jest configured), a pytest project
+(`pytest.ini`, `conftest.py`, or a
 `[tool.pytest.ini_options]`/`[tool:pytest]` section), or a Rust crate or
 Cargo workspace (`Cargo.toml`):
 
@@ -90,7 +94,7 @@ fastci test --all
 
 # Forward flags to the underlying test runner
 fastci test -- -race -v        # go test
-fastci test -- --coverage      # jest
+fastci test -- --coverage      # vitest run / jest
 fastci test -- -x -k foo       # pytest
 fastci test -- --no-fail-fast  # cargo test
 ```
@@ -106,6 +110,19 @@ fastci: selected 3/42 test target(s) (go, 93% skipped)
 ok  	github.com/you/yourrepo/internal/parser	0.004s
 ok  	github.com/you/yourrepo/internal/parser/lexer	0.002s
 ok  	github.com/you/yourrepo/cmd/yourtool	0.011s
+```
+
+Example output (Vitest, with a `tsconfig.json` path alias in the mix):
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  src/leaf.ts
+fastci: selected 3/5 test target(s) (vitest, 40% skipped)
+    src/consumer.test.ts
+    src/leaf.test.ts
+    src/mid.test.ts
+fastci: dry-run, not executing tests
 ```
 
 Example output (Jest, with a `tsconfig.json` path alias in the mix):
@@ -149,7 +166,7 @@ fastci: dry-run, not executing tests
 ```
 
 Lines marked `*` are packages/files that changed directly; lines marked `~`
-contain an import fastci can't statically resolve (see the Jest/pytest
+contain an import fastci can't statically resolve (see the Vitest/Jest/pytest
 dynamic-import notes under [Current limitations](#current-limitations)) and
 are always included as a safety net; unmarked lines are pulled in
 transitively because they depend on something that changed (directly, or
@@ -175,7 +192,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Jest projects
+      # Vitest/Jest projects
       # - uses: actions/setup-node@v4
       #   with:
       #     node-version: 22
@@ -210,6 +227,26 @@ jobs:
 - Non-Go changes (docs, workflow YAML, etc.) are treated as not affecting
   any test package. Go files that reference non-Go inputs at build time
   (e.g. `//go:embed`) aren't tracked yet.
+
+**Vitest**
+- Shares its esbuild-based import resolution, dynamic `import()`/`require()`
+  handling, and `node_modules`/workspace-monorepo limitation with Jest (see
+  below) — everything in the Jest section below other than the
+  `moduleNameMapper`/`jest.config.*` points applies to Vitest too.
+- Vite's own `resolve.alias` config (in `vite.config.*`/`vitest.config.*`)
+  is **not** resolved — unlike Jest's `moduleNameMapper`, which is a
+  JSON-shaped value that can be read as data, a Vite alias list lives
+  inside arbitrary JS/TS config code with no static format to parse. An
+  import resolved only through such an alias is invisible to the graph;
+  `tsconfig.json` `paths`/`baseUrl` aliases (which esbuild resolves
+  directly) are unaffected by this and work as expected.
+- Test-file discovery uses Vitest's default `include` pattern
+  (`**/*.{test,spec}.?(c|m)[jt]sx?`). A custom `test.include`/`test.exclude`
+  in `vitest.config.*` isn't honored yet — such a project still works, but
+  test-file classification falls back to the default.
+- Any `vitest.config.*` or `vite.config.*` change forces a full run (same
+  treatment as `jest.config.*` for Jest), since either can change aliases,
+  plugins, or test settings the import graph can't see.
 
 **Jest**
 - Bare specifiers that resolve into `node_modules` are treated as external
@@ -313,8 +350,9 @@ This tracks the phased plan in the project design doc:
   `fastci guard` (supply-chain / runtime security guardrails).
 
 Language coverage grows incrementally alongside this. Candidates being
-considered next: Jest monorepo/workspace cross-package resolution, and
-function-level (not just package/crate/file-level) impact analysis.
+considered next: Vite `resolve.alias` resolution, Vitest/Jest
+monorepo/workspace cross-package resolution, and function-level (not just
+package/crate/file-level) impact analysis.
 
 ## License
 

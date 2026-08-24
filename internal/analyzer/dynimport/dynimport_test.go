@@ -1,8 +1,8 @@
-package jestanalyzer
+package dynimport
 
 import "testing"
 
-func TestScanDynamicImportSites(t *testing.T) {
+func TestScanSites(t *testing.T) {
 	cases := []struct {
 		name       string
 		src        string
@@ -31,7 +31,7 @@ func TestScanDynamicImportSites(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := scanDynamicImportSites([]byte(c.src))
+			s := ScanSites([]byte(c.src))
 			if s.Opaque != c.wantOpaque {
 				t.Errorf("Opaque = %v, want %v", s.Opaque, c.wantOpaque)
 			}
@@ -42,9 +42,9 @@ func TestScanDynamicImportSites(t *testing.T) {
 	}
 }
 
-func TestScanDynamicImportSitesTemplateCallOffsets(t *testing.T) {
+func TestScanSitesTemplateCallOffsets(t *testing.T) {
 	src := "import(`./plugins/${name}`)"
-	s := scanDynamicImportSites([]byte(src))
+	s := ScanSites([]byte(src))
 	if len(s.TemplateCalls) != 1 {
 		t.Fatalf("len(TemplateCalls) = %d, want 1", len(s.TemplateCalls))
 	}
@@ -59,7 +59,7 @@ func TestScanDynamicImportSitesTemplateCallOffsets(t *testing.T) {
 
 func TestNeutralizeTemplateCalls(t *testing.T) {
 	src := []byte("import(`./plugins/${name}`);")
-	scan := scanDynamicImportSites(src)
+	scan := ScanSites(src)
 	if len(scan.TemplateCalls) != 1 {
 		t.Fatalf("expected 1 template call, got %d", len(scan.TemplateCalls))
 	}
@@ -70,7 +70,7 @@ func TestNeutralizeTemplateCalls(t *testing.T) {
 	}
 	// The rewritten source must not itself contain anything that looks like
 	// a dynamic call the scanner would flag.
-	if rescan := scanDynamicImportSites([]byte(got)); rescan.Opaque || len(rescan.TemplateCalls) != 0 {
+	if rescan := ScanSites([]byte(got)); rescan.Opaque || len(rescan.TemplateCalls) != 0 {
 		t.Errorf("rewritten source rescans as dynamic: %+v", rescan)
 	}
 }

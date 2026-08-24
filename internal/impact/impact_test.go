@@ -10,6 +10,7 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/impact"
 )
@@ -18,6 +19,7 @@ var goAnalyzer analyzer.Analyzer = goanalyzer.New()
 var jestAnalyzer analyzer.Analyzer = jestanalyzer.New()
 var pytestAnalyzer analyzer.Analyzer = pytestanalyzer.New()
 var cargoAnalyzer analyzer.Analyzer = cargoanalyzer.New()
+var vitestAnalyzer analyzer.Analyzer = vitestanalyzer.New()
 
 func loadSampleGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
@@ -605,6 +607,95 @@ func TestComputeCargoNonRustFileIsIgnored(t *testing.T) {
 		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
 	}
 	want := []string{"consumer", "leaf", "mid"}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func loadSampleVitestGraph(t *testing.T) (*graph.Graph, string) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "samplevitest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := vitestAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return g, dir
+}
+
+func TestComputeVitestTransitiveImpactThroughTsconfigAlias(t *testing.T) {
+	g, dir := loadSampleVitestGraph(t)
+
+	// leaf.ts <- mid.ts (relative import) <- consumer.ts (tsconfig path
+	// alias @app/mid) <- consumer.test.ts. leaf.test.ts also imports leaf.ts
+	// directly. isolated.test.ts must NOT be selected.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "leaf.ts")}, vitestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{
+		filepath.Join(dir, "src", "consumer.test.ts"),
+		filepath.Join(dir, "src", "leaf.test.ts"),
+		filepath.Join(dir, "src", "mid.test.ts"),
+	}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeVitestTestOnlyDependencyEdge(t *testing.T) {
+	g, dir := loadSampleVitestGraph(t)
+
+	// testutil.ts is imported only by leaf.test.ts (not by any production
+	// file); that edge must still be honored.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "testutil.ts")}, vitestAnalyzer)
+	want := []string{filepath.Join(dir, "src", "leaf.test.ts")}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeVitestConfigTriggersFullRun(t *testing.T) {
+	g, dir := loadSampleVitestGraph(t)
+
+	res := impact.Compute(g, []string{filepath.Join(dir, "vitest.config.ts")}, vitestAnalyzer)
+	if !res.FullRun {
+		t.Fatal("expected a full run when vitest.config.ts changes")
+	}
+}
+
+func TestComputeVitestNonSourceFileIsIgnored(t *testing.T) {
+	g, dir := loadSampleVitestGraph(t)
+
+	res := impact.Compute(g, []string{
+		filepath.Join(dir, "src", "leaf.ts"),
+		filepath.Join(dir, "README.md"),
+	}, vitestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{
+		filepath.Join(dir, "src", "consumer.test.ts"),
+		filepath.Join(dir, "src", "leaf.test.ts"),
+		filepath.Join(dir, "src", "mid.test.ts"),
+	}
+	if !reflect.DeepEqual(res.Targets, want) {
+		t.Errorf("Targets = %v, want %v", res.Targets, want)
+	}
+}
+
+func TestComputeVitestDynamicImportImpact(t *testing.T) {
+	g, dir := loadSampleVitestGraph(t)
+
+	// dynconsumer.ts reaches dynleaf.ts only through a static-argument
+	// dynamic import("./dynleaf"); that edge must still be honored.
+	res := impact.Compute(g, []string{filepath.Join(dir, "src", "dynleaf.ts")}, vitestAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+	want := []string{filepath.Join(dir, "src", "dynconsumer.test.ts")}
 	if !reflect.DeepEqual(res.Targets, want) {
 		t.Errorf("Targets = %v, want %v", res.Targets, want)
 	}

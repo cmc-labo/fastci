@@ -1,0 +1,7 @@
+{
+  "name": "samplevitest",
+  "private": true,
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

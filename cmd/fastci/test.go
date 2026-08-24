@@ -12,15 +12,22 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
 	"github.com/hpscript/fastci/internal/gitdiff"
 	"github.com/hpscript/fastci/internal/impact"
 )
 
 // candidateAnalyzers lists every built-in analyzer, tried in order against
 // the working directory until one reports it can handle the project.
+// vitestanalyzer is tried before jestanalyzer: its Detect only matches on a
+// vitest.config.* file or a "vitest" dependency, both specific enough signals
+// that they should win even if a project also happens to have a stale
+// "jest" devDependency left over from a migration; a plain Jest project
+// matches neither and falls through to jestanalyzer as before.
 func candidateAnalyzers() []analyzer.Analyzer {
 	return []analyzer.Analyzer{
 		goanalyzer.New(),
+		vitestanalyzer.New(),
 		jestanalyzer.New(),
 		pytestanalyzer.New(),
 		cargoanalyzer.New(),
@@ -44,16 +51,17 @@ the packages/files that changed or transitively depend on something that
 changed.
 
 The project type is auto-detected: a Go module or workspace (go.mod /
-go.work), a Jest-based TypeScript/JavaScript project (package.json with
-Jest configured), a pytest-based Python project (pytest.ini, conftest.py,
-or a "[tool.pytest.ini_options]"/"[tool:pytest]" section), or a Rust crate
-or Cargo workspace (Cargo.toml).
+go.work), a Vitest-based TypeScript/JavaScript project (vitest.config.* or
+a "vitest" dependency), a Jest-based TypeScript/JavaScript project
+(package.json with Jest configured), a pytest-based Python project
+(pytest.ini, conftest.py, or a "[tool.pytest.ini_options]"/"[tool:pytest]"
+section), or a Rust crate or Cargo workspace (Cargo.toml).
 
 Flags after "--" are forwarded to the underlying test runner unchanged,
 e.g.:
 
   fastci test -- -v -race        # go test
-  fastci test -- --coverage      # jest
+  fastci test -- --coverage      # vitest/jest
   fastci test -- -x -k foo       # pytest
   fastci test -- --no-fail-fast  # cargo test`,
 		RunE: func(cmd *cobra.Command, args []string) error {

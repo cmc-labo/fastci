@@ -1,21 +1,20 @@
-// Package jestanalyzer implements the fastci analyzer.Analyzer interface
-// for TypeScript/JavaScript projects tested with Jest.
+// Package vitestanalyzer implements the fastci analyzer.Analyzer interface
+// for TypeScript/JavaScript projects tested with Vitest.
 //
-// Unlike Go, where "package" is a natural test-able unit, Jest tests at
-// file granularity, so every source file is its own graph.Node here.
-// Import edges (relative imports, tsconfig `paths`/`baseUrl` aliases,
-// dynamic import() calls with a static string argument, and bare
-// node_modules specifiers) are resolved by actually running them through
-// esbuild's real resolver rather than pattern-matching import statements
-// as strings - the same "delegate to the real toolchain" approach
-// goanalyzer uses via go/packages. A Jest `moduleNameMapper` config (read
-// from jest.config.json or package.json's "jest" field) is additionally
-// applied via an esbuild resolver plugin, so aliases defined only there
-// (not in tsconfig) are tracked too. See the package doc for
-// modulenamemapper.go and the README for what's still out of reach: import
-// specifiers built from a runtime-computed (non-literal) expression can't
-// be resolved by any static tool, esbuild included.
-package jestanalyzer
+// Like jestanalyzer, it tests at file granularity and resolves imports by
+// running the project's source through esbuild's real resolver - relative
+// imports, tsconfig `paths`/`baseUrl` aliases, extension/index resolution,
+// and import()/require() calls with a static string or resolvable
+// template-literal argument are all handled the same way jestanalyzer does
+// (see internal/analyzer/dynimport for the dynamic-import safety net shared
+// by both). Unlike jestanalyzer, it does not resolve Vite's own
+// `resolve.alias` config (in vite.config.*/vitest.config.*): unlike Jest's
+// moduleNameMapper, which is JSON-shaped and can be read as data, a Vite
+// alias list lives inside arbitrary JS/TS config code, so there's no static
+// config format to parse the way loadModuleNameMapper does for Jest. An
+// import resolved only through such an alias is invisible to the graph -
+// see the README for this limitation.
+package vitestanalyzer
 
 import (
 	"context"
@@ -34,28 +33,38 @@ import (
 	"github.com/hpscript/fastci/internal/runner"
 )
 
-// Analyzer is the Jest implementation of analyzer.Analyzer.
+// Analyzer is the Vitest implementation of analyzer.Analyzer.
 type Analyzer struct{}
 
-// New returns a Jest analyzer.
+// New returns a Vitest analyzer.
 func New() *Analyzer { return &Analyzer{} }
 
-func (*Analyzer) Name() string { return "jest" }
+func (*Analyzer) Name() string { return "vitest" }
 
-var jestConfigFileNames = []string{
-	"jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.cjs", "jest.config.json",
+var vitestConfigFileNames = []string{
+	"vitest.config.ts", "vitest.config.js", "vitest.config.mjs", "vitest.config.cjs",
+	"vitest.config.mts", "vitest.config.cts",
 }
 
 type packageJSON struct {
 	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
-	Jest            json.RawMessage   `json:"jest"`
 }
 
-// Detect reports whether dir has a package.json with Jest configured,
-// either via a jest.config.* file, a "jest" key in package.json, or jest
-// listed as a dependency.
+// Detect reports whether dir has a Vitest config file (vitest.config.*) or
+// vitest listed as a dependency in package.json. Unlike Jest, Vitest has no
+// equivalent of a "jest" field embedded in package.json, and a bare
+// vite.config.* isn't treated as a signal on its own - plenty of Vite
+// projects have no tests at all, and whether one configures a `test` block
+// isn't something worth statically parsing just to detect - see the
+// package doc for why that config can't be read as data anyway.
 func (*Analyzer) Detect(dir string) (bool, error) {
+	for _, name := range vitestConfigFileNames {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true, nil
+		}
+	}
+
 	pkg, err := readPackageJSON(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -63,20 +72,11 @@ func (*Analyzer) Detect(dir string) (bool, error) {
 		}
 		return false, err
 	}
-
-	if len(pkg.Jest) > 0 {
+	if _, ok := pkg.Dependencies["vitest"]; ok {
 		return true, nil
 	}
-	if _, ok := pkg.Dependencies["jest"]; ok {
+	if _, ok := pkg.DevDependencies["vitest"]; ok {
 		return true, nil
-	}
-	if _, ok := pkg.DevDependencies["jest"]; ok {
-		return true, nil
-	}
-	for _, name := range jestConfigFileNames {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true, nil
-		}
 	}
 	return false, nil
 }
@@ -88,13 +88,14 @@ func readPackageJSON(dir string) (*packageJSON, error) {
 	}
 	var pkg packageJSON
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return nil, fmt.Errorf("jestanalyzer: parsing package.json: %w", err)
+		return nil, fmt.Errorf("vitestanalyzer: parsing package.json: %w", err)
 	}
 	return &pkg, nil
 }
 
 var trackedExt = map[string]bool{
-	".ts": true, ".tsx": true, ".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
+	".ts": true, ".tsx": true, ".js": true, ".jsx": true,
+	".mjs": true, ".cjs": true, ".mts": true, ".cts": true,
 }
 
 var skipDirs = map[string]bool{
@@ -143,15 +144,13 @@ type metafile struct {
 
 // Build discovers every tracked source file under dir and asks esbuild to
 // resolve each one's imports - relative paths, tsconfig `paths`/`baseUrl`
-// aliases, and extension/index resolution are all handled by esbuild's
-// real resolver. Bare specifiers that resolve into node_modules (including
-// other packages in an npm/pnpm/yarn workspace) are treated as external
-// and are not tracked as graph edges; see the package doc and README for
-// the current monorepo limitation this implies.
+// aliases, and extension/index resolution are all handled by esbuild's real
+// resolver. Bare specifiers that resolve into node_modules are treated as
+// external and are not tracked as graph edges.
 func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	files, err := discoverSourceFiles(dir)
 	if err != nil {
-		return nil, fmt.Errorf("jestanalyzer: discovering source files: %w", err)
+		return nil, fmt.Errorf("vitestanalyzer: discovering source files: %w", err)
 	}
 	g := graph.New()
 	if len(files) == 0 {
@@ -162,14 +161,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	for i, f := range files {
 		rel, err := filepath.Rel(dir, f)
 		if err != nil {
-			return nil, fmt.Errorf("jestanalyzer: %w", err)
+			return nil, fmt.Errorf("vitestanalyzer: %w", err)
 		}
 		entryPoints[i] = filepath.ToSlash(rel)
-	}
-
-	mapperEntries, err := loadModuleNameMapper(dir)
-	if err != nil {
-		return nil, err
 	}
 
 	opaqueFiles, rewrites, templateCallsByFile, err := dynimport.ScanFiles(files)
@@ -188,9 +182,6 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		AbsWorkingDir: dir,
 		Outdir:        ".fastci-metafile",
 	}
-	if len(mapperEntries) > 0 {
-		opts.Plugins = append(opts.Plugins, moduleNameMapperPlugin(dir, mapperEntries))
-	}
 	if len(rewrites) > 0 {
 		opts.Plugins = append(opts.Plugins, dynimport.NeutralizerPlugin(rewrites))
 	}
@@ -200,12 +191,12 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		for i, e := range result.Errors {
 			msgs[i] = e.Text
 		}
-		return nil, fmt.Errorf("jestanalyzer: esbuild: %s", strings.Join(msgs, "; "))
+		return nil, fmt.Errorf("vitestanalyzer: esbuild: %s", strings.Join(msgs, "; "))
 	}
 
 	var mf metafile
 	if err := json.Unmarshal([]byte(result.Metafile), &mf); err != nil {
-		return nil, fmt.Errorf("jestanalyzer: parsing esbuild metafile: %w", err)
+		return nil, fmt.Errorf("vitestanalyzer: parsing esbuild metafile: %w", err)
 	}
 
 	toAbs := func(relPath string) string {
@@ -235,7 +226,8 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	// always possibly affected, and template calls with a static directory
 	// prefix get real edges to every file under that directory (a safe
 	// superset - esbuild itself never sees these calls, see the dynimport
-	// package doc).
+	// package doc). A file is only left unmarked if every one of its
+	// template calls resolved to real files.
 	for absFile := range opaqueFiles {
 		g.Node(absFile).HasDynamicImport = true
 	}
@@ -265,30 +257,28 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	return g, nil
 }
 
-// testFileSuffixRE matches Jest's default testMatch conventions:
-// *.test.{js,jsx,ts,tsx,mjs,cjs} or *.spec.{...}. Custom testMatch/testRegex
-// overrides in a Jest config aren't honored yet - see README.
-var testFileSuffixRE = regexp.MustCompile(`\.(test|spec)\.(jsx?|tsx?|mjs|cjs)$`)
+// testFileSuffixRE matches Vitest's default include pattern:
+// **/*.{test,spec}.?(c|m)[jt]s?(x). Custom test/include overrides in a
+// vitest.config.* aren't honored yet - such a project still works, but
+// test-file classification falls back to this default.
+var testFileSuffixRE = regexp.MustCompile(`\.(test|spec)\.([cm]?[jt]sx?)$`)
 
 func isTestFile(absPath string) bool {
-	for _, part := range strings.Split(filepath.ToSlash(absPath), "/") {
-		if part == "__tests__" {
-			return true
-		}
-	}
 	return testFileSuffixRE.MatchString(filepath.Base(absPath))
 }
 
 var fullRunBasenames = map[string]bool{
 	"package.json": true, "package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
-	"jest.config.js": true, "jest.config.ts": true, "jest.config.mjs": true, "jest.config.cjs": true, "jest.config.json": true,
-	"babel.config.js": true, "babel.config.cjs": true, "babel.config.mjs": true, "babel.config.json": true,
-	".babelrc": true, ".babelrc.js": true, ".babelrc.json": true, ".swcrc": true,
+	"vitest.config.js": true, "vitest.config.ts": true, "vitest.config.mjs": true,
+	"vitest.config.cjs": true, "vitest.config.mts": true, "vitest.config.cts": true,
+	"vite.config.js": true, "vite.config.ts": true, "vite.config.mjs": true,
+	"vite.config.cjs": true, "vite.config.mts": true, "vite.config.cts": true,
 }
 
 // FullRunFile reports whether a changed file should force a full test run:
-// manifests, lockfiles, and compiler/test-runner configs can all change
-// behavior in ways the import graph alone doesn't capture.
+// manifests, lockfiles, and Vite/Vitest config (which can alter aliases,
+// plugins, or test settings in ways the import graph alone doesn't capture)
+// all qualify.
 func (*Analyzer) FullRunFile(absPath string) bool {
 	base := filepath.Base(absPath)
 	if fullRunBasenames[base] {
@@ -310,40 +300,29 @@ func (*Analyzer) Ignorable(absPath string) bool {
 	return !trackedExt[filepath.Ext(absPath)]
 }
 
-// AllTargets returns nil: Jest run with no path arguments already runs
+// AllTargets returns nil: `vitest run` with no path arguments already runs
 // every discovered test, so a full/--all run needs no explicit target list.
 func (*Analyzer) AllTargets(dir string) ([]string, error) {
 	return nil, nil
 }
 
-// RunTests runs Jest, using the local node_modules/.bin/jest binary if
-// present and falling back to `npx jest` otherwise. When targets is
-// non-empty, they're combined into a single anchored regex passed as a
-// positional pattern argument - Jest matches positional arguments against
-// each test file's absolute path. A single combined argument (rather than
-// a --testPathPattern/--testPathPatterns flag, whose name changed between
-// Jest 29 and 30) keeps this working across Jest versions.
+// RunTests runs `vitest run` (the non-watch, single-pass mode - Vitest
+// defaults to watch mode otherwise), using the local
+// node_modules/.bin/vitest binary if present and falling back to `npx
+// vitest` otherwise. Targets (test file paths) are passed as positional
+// filter arguments, which Vitest matches directly against test file paths.
 func (*Analyzer) RunTests(ctx context.Context, dir string, targets []string, extraArgs []string) error {
-	argv := jestBinArgv(dir)
-	if len(targets) > 0 {
-		argv = append(argv, testPathPattern(targets))
-	}
+	argv := vitestBinArgv(dir)
+	argv = append(argv, "run")
+	argv = append(argv, targets...)
 	argv = append(argv, extraArgs...)
 	return runner.Run(ctx, runner.Options{Dir: dir, Argv: argv})
 }
 
-func jestBinArgv(dir string) []string {
-	local := filepath.Join(dir, "node_modules", ".bin", "jest")
+func vitestBinArgv(dir string) []string {
+	local := filepath.Join(dir, "node_modules", ".bin", "vitest")
 	if info, err := os.Stat(local); err == nil && !info.IsDir() {
 		return []string{local}
 	}
-	return []string{"npx", "jest"}
-}
-
-func testPathPattern(targets []string) string {
-	alts := make([]string, len(targets))
-	for i, t := range targets {
-		alts[i] = "^" + regexp.QuoteMeta(filepath.ToSlash(t)) + "$"
-	}
-	return strings.Join(alts, "|")
+	return []string{"npx", "vitest"}
 }
