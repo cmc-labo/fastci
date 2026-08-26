@@ -6,6 +6,7 @@ package analyzer
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hpscript/fastci/internal/graph"
 )
@@ -49,16 +50,25 @@ type Analyzer interface {
 }
 
 // Detect tries each candidate's Detect method against dir in order and
-// returns the first match.
+// returns the first match. A candidate whose Detect call itself errors -
+// e.g. goanalyzer's `go env GOWORK` lookup when no `go` binary is on PATH -
+// doesn't abort detection for every other, unrelated candidate; it's
+// treated as "this one doesn't match" and folded into the final error only
+// if no candidate matches at all.
 func Detect(dir string, candidates []Analyzer) (Analyzer, error) {
+	var detectErrs []string
 	for _, a := range candidates {
 		ok, err := a.Detect(dir)
 		if err != nil {
-			return nil, fmt.Errorf("analyzer %s: detecting project type: %w", a.Name(), err)
+			detectErrs = append(detectErrs, fmt.Sprintf("%s: %v", a.Name(), err))
+			continue
 		}
 		if ok {
 			return a, nil
 		}
+	}
+	if len(detectErrs) > 0 {
+		return nil, fmt.Errorf("no supported project detected in %s (%s)", dir, strings.Join(detectErrs, "; "))
 	}
 	return nil, fmt.Errorf("no supported project detected in %s", dir)
 }
