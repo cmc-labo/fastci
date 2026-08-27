@@ -185,7 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # fastci needs full history to diff against the base branch
+          fetch-depth: 0   # simplest: full history, no recovery fetch needed at all
 
       # Go projects
       - uses: actions/setup-go@v5
@@ -207,12 +207,20 @@ jobs:
       # Cargo projects: actions-rs or dtolnay/rust-toolchain, or nothing
       # if the runner image already ships a toolchain.
 
-      - name: Fetch base branch
-        run: git fetch origin ${{ github.base_ref }} --depth=1
-
       - run: go install github.com/hpscript/fastci/cmd/fastci@latest
       - run: fastci test --base origin/${{ github.base_ref }}
 ```
+
+`fetch-depth: 0` above is a recommendation, not a hard requirement: if you leave the
+default `fetch-depth: 1` (or any other shallow/partial checkout) in place,
+`fastci test --base <ref>` detects that it can't resolve a merge base and
+automatically runs the equivalent of `git fetch --unshallow` and/or fetches
+`<ref>` itself before diffing — the same recovery you'd otherwise have to
+script by hand. This only kicks in when needed, so it costs nothing on a
+full checkout; it does mean the first `fastci test` invocation on a shallow
+checkout does extra network I/O. If that fetch itself fails (no network, a
+`<ref>` that doesn't exist at all, permissions), fastci reports a clear
+error rather than a bare `git` failure.
 
 ## Current limitations
 
