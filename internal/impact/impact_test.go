@@ -1,6 +1,7 @@
 package impact_test
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -447,6 +448,53 @@ func TestComputePytestDynamicImportPropagatesThroughStaticImporter(t *testing.T)
 	}
 	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
 		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
+	}
+}
+
+// TestComputePytestDeletedFileWithOneSurvivingSiblingDoesNotMisattribute
+// guards against a real bug: graph.TargetForFile's directory fallback (built
+// for Go/Cargo, where many files legitimately share one node) previously
+// also applied to pytest's one-node-per-file graphs. Deleting impl.py from a
+// directory that then has exactly one file left (public.py, unrelated)
+// caused impl.py's deletion to resolve to public.py's node instead of being
+// reported as unresolved - silently skipping test_consumer.py, which
+// actually imports the deleted impl.py, while only test_public.py ran.
+func TestComputePytestDeletedFileWithOneSurvivingSiblingDoesNotMisattribute(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(rel, content string) {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeFile("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = [\"src\"]\n")
+	writeFile("src/mypkg/__init__.py", "")
+	// No __init__.py in feature/: an implicit namespace package with
+	// exactly one file (public.py) once impl.py is gone.
+	writeFile("src/mypkg/feature/public.py", "def pub_fn():\n    return 'public'\n")
+	writeFile("tests/test_consumer.py", "from mypkg.feature.impl import impl_fn\n\ndef test_consumer():\n    assert impl_fn() == 'impl'\n")
+	writeFile("tests/test_public.py", "from mypkg.feature.public import pub_fn\n\ndef test_public():\n    assert pub_fn() == 'public'\n")
+
+	// impl.py is deliberately never written: this reproduces the
+	// post-deletion state Build() sees when impl.py was just `git rm`'d.
+	implPy := filepath.Join(dir, "src", "mypkg", "feature", "impl.py")
+
+	g, err := pytestAnalyzer.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, ok := g.TargetForFile(implPy); ok {
+		t.Fatal("TargetForFile resolved the deleted impl.py to its surviving sibling public.py - this is the bug")
+	}
+
+	res := impact.Compute(g, []string{implPy}, pytestAnalyzer)
+	if !res.FullRun {
+		t.Errorf("Compute should fall back to a full run when a changed file can't be resolved, got Targets = %v", res.Targets)
 	}
 }
 

@@ -153,6 +153,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		return nil, fmt.Errorf("vitestanalyzer: discovering source files: %w", err)
 	}
 	g := graph.New()
+	// Every node here is a single file (unlike Go/Cargo, where many files
+	// legitimately share one package/crate node) - see the field doc.
+	g.DisableDirFallback = true
 	if len(files) == 0 {
 		return g, nil
 	}

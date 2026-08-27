@@ -114,6 +114,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	}
 
 	g := graph.New()
+	// Every node here is a single file (unlike Go/Cargo, where many files
+	// legitimately share one package/crate node) - see the field doc.
+	g.DisableDirFallback = true
 	toAbs := func(relPath string) string {
 		return filepath.Join(dir, filepath.FromSlash(relPath))
 	}

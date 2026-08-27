@@ -33,6 +33,18 @@ type Graph struct {
 	// Importers maps node ID -> IDs of nodes that directly depend on it
 	// (the reverse of Node.Imports). Populated by BuildImporters.
 	Importers map[string][]string
+	// DisableDirFallback turns off TargetForFile's directory-based
+	// resolution. Directory-grouped analyzers (Go, Cargo) legitimately have
+	// many files share one node, so a directory maps to exactly one node ID
+	// regardless of which of its files changed or was deleted - that's
+	// exactly what the fallback is for. File-granularity analyzers (Jest,
+	// Vitest, pytest) have no such grouping: every file is its own node, so
+	// a directory having exactly one *surviving* file after some other file
+	// in it was deleted is coincidence, not identity - resolving the
+	// deleted file to that unrelated survivor would silently misattribute
+	// the change and can cause a test that genuinely depends on the deleted
+	// file to be skipped. Those analyzers must set this to true.
+	DisableDirFallback bool
 
 	fileToNode map[string]string
 	dirToNodes map[string][]string
@@ -83,11 +95,15 @@ func (g *Graph) BuildImporters() {
 
 // TargetForFile resolves an absolute file path to the ID of the Node it
 // belongs to. ok is false if the file isn't part of any known node (e.g.
-// it's not a source file the analyzer tracks, or it was deleted and its
-// directory no longer resolves to a single unambiguous node).
+// it's not a source file the analyzer tracks, or - unless DisableDirFallback
+// is set - it was deleted and its directory no longer resolves to a single
+// unambiguous node).
 func (g *Graph) TargetForFile(absPath string) (id string, ok bool) {
 	if t, ok := g.fileToNode[absPath]; ok {
 		return t, true
+	}
+	if g.DisableDirFallback {
+		return "", false
 	}
 	dir := filepath.Dir(absPath)
 	if targets := g.dirToNodes[dir]; len(targets) == 1 {
