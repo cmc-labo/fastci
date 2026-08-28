@@ -103,7 +103,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("pytestanalyzer: resolving imports: %w\n%s", err, ee.Stderr)
+			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
+				return nil, fmt.Errorf("pytestanalyzer: resolving imports: %w\n%s", err, stderr)
+			}
 		}
 		return nil, fmt.Errorf("pytestanalyzer: resolving imports: %w", err)
 	}

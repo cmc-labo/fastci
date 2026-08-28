@@ -185,7 +185,7 @@ func workspaceModuleDirs(dir string) ([]string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("goanalyzer: listing workspace modules: %w\n%s", err, stderr.String())
+		return nil, fmt.Errorf("goanalyzer: listing workspace modules: %w%s", err, stderrSuffix(stderr.String()))
 	}
 
 	var dirs []string
@@ -198,6 +198,17 @@ func workspaceModuleDirs(dir string) ([]string, error) {
 	return dirs, nil
 }
 
+// stderrSuffix formats captured stderr for appending to an error message:
+// "\n<trimmed stderr>" if there's anything to show, or "" if stderr was
+// empty (e.g. the command never started) - avoiding a dangling blank line.
+func stderrSuffix(stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return ""
+	}
+	return "\n" + stderr
+}
+
 func goEnv(dir, key string) (string, error) {
 	cmd := exec.Command("go", "env", key)
 	cmd.Dir = dir
@@ -205,7 +216,7 @@ func goEnv(dir, key string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("goanalyzer: go env %s: %w\n%s", key, err, stderr.String())
+		return "", fmt.Errorf("goanalyzer: go env %s: %w%s", key, err, stderrSuffix(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }

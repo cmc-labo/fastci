@@ -130,7 +130,10 @@ func runGit(dir string, args ...string) ([]string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, stderr.String())
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, msg)
+		}
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	lines := strings.Split(stdout.String(), "\n")
 	result := make([]string, 0, len(lines))
