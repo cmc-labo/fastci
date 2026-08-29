@@ -14,6 +14,7 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
 	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/impact"
 )
 
@@ -36,10 +37,11 @@ func candidateAnalyzers() []analyzer.Analyzer {
 
 func newTestCmd() *cobra.Command {
 	var (
-		base    string
-		dryRun  bool
-		all     bool
-		verbose bool
+		base                string
+		dryRun              bool
+		all                 bool
+		verbose             bool
+		fullRunThresholdPct float64
 	)
 
 	cmd := &cobra.Command{
@@ -66,11 +68,12 @@ e.g.:
   fastci test -- --no-fail-fast  # cargo test`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTest(cmd, testOpts{
-				base:      base,
-				dryRun:    dryRun,
-				all:       all,
-				verbose:   verbose,
-				extraArgs: args,
+				base:                base,
+				dryRun:              dryRun,
+				all:                 all,
+				verbose:             verbose,
+				fullRunThresholdPct: fullRunThresholdPct,
+				extraArgs:           args,
 			})
 		},
 	}
@@ -79,16 +82,19 @@ e.g.:
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the selected test targets without running them")
 	cmd.Flags().BoolVar(&all, "all", false, "skip impact analysis and run the full test suite")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print the changed files and full selection reasoning")
+	cmd.Flags().Float64Var(&fullRunThresholdPct, "full-run-threshold", 0,
+		"if this many percent (0-100) of tracked source files changed, run the full suite instead of narrowing - a safety net against a diff too broad for per-file attribution to be meaningful. A change transitively affecting many tests through the dependency graph (e.g. a shared core library) is already handled precisely without this flag; it exists for diffs so broad that narrowing itself is the risk. 0 (default) disables this check.")
 
 	return cmd
 }
 
 type testOpts struct {
-	base      string
-	dryRun    bool
-	all       bool
-	verbose   bool
-	extraArgs []string
+	base                string
+	dryRun              bool
+	all                 bool
+	verbose             bool
+	fullRunThresholdPct float64
+	extraArgs           []string
 }
 
 func runTest(cmd *cobra.Command, opts testOpts) error {
@@ -143,10 +149,23 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 	result := impact.Compute(g, changed, a)
 	total := len(g.TestNodeIDs())
 
+	if !result.FullRun && opts.fullRunThresholdPct > 0 {
+		if reason, ok := fullRunThresholdReason(g, changed, a, opts.fullRunThresholdPct); ok {
+			result.FullRun = true
+			result.FullRunReasons = []string{reason}
+		}
+	}
+
 	if result.FullRun {
 		fmt.Printf("fastci: could not safely narrow the test set, running the full suite (%s). Reason(s):\n", a.Name())
 		for _, r := range result.FullRunReasons {
-			fmt.Printf("  - %s\n", relOrSelf(repoRoot, r))
+			// Most reasons are absolute file paths (e.g. a manifest that
+			// forced a full run); the threshold check's reason is a plain
+			// sentence instead, so only relativize actual paths.
+			if filepath.IsAbs(r) {
+				r = relOrSelf(repoRoot, r)
+			}
+			fmt.Printf("  - %s\n", r)
 		}
 		if opts.dryRun {
 			fmt.Println("fastci: dry-run, not executing tests")
@@ -198,6 +217,45 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 	}
 
 	return a.RunTests(cmd.Context(), cwd, result.Targets, opts.extraArgs)
+}
+
+// fullRunThresholdReason reports whether the fraction of changed files that
+// are actually part of the analyzer's tracked source set (i.e. excluding
+// docs/config/other files Ignorable already treats as inert) meets or
+// exceeds thresholdPct percent of every tracked source file in the graph.
+// This is a blunt, file-count-based safety net independent of the
+// dependency graph itself - for a diff broad enough (e.g. a mass reformat
+// or a large refactor), per-file impact attribution carries more risk of a
+// subtle miss than it saves in narrowing, so it's simpler and safer to just
+// run everything. It does not affect the common case of a change to one
+// widely-depended-on file (e.g. a shared core library): that's already
+// resolved precisely via the reverse-dependency graph, which naturally
+// selects every test actually at risk without needing this flag at all.
+func fullRunThresholdReason(g *graph.Graph, changed []string, a analyzer.Analyzer, thresholdPct float64) (reason string, ok bool) {
+	totalFiles := 0
+	for _, n := range g.Nodes {
+		totalFiles += len(n.Files)
+	}
+	if totalFiles == 0 {
+		return "", false
+	}
+
+	trackedChanged := 0
+	for _, f := range changed {
+		if !a.Ignorable(f) {
+			trackedChanged++
+		}
+	}
+	if trackedChanged == 0 {
+		return "", false
+	}
+
+	pct := float64(trackedChanged) / float64(totalFiles) * 100
+	if pct < thresholdPct {
+		return "", false
+	}
+	return fmt.Sprintf("%d/%d tracked source file(s) changed (%.0f%%), at or above --full-run-threshold=%.0f%%",
+		trackedChanged, totalFiles, pct, thresholdPct), true
 }
 
 func relOrSelf(base, path string) string {

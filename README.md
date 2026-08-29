@@ -62,7 +62,13 @@ See [Roadmap](#roadmap) for what's next.
    of tests is run. If a change can't be safely attributed (e.g. a
    manifest/lockfile changed, or a changed source file can't be resolved),
    fastci falls back to running the full suite rather than silently
-   skipping something that matters.
+   skipping something that matters. A change to a widely-depended-on file
+   (a shared core library, say) is already covered by this same graph walk:
+   every test that transitively depends on it is selected, precisely,
+   without any special-casing. `--full-run-threshold` (see [Usage](#usage))
+   adds an optional, separate safety net for the opposite situation - a
+   diff broad enough that per-file narrowing itself carries more risk than
+   it saves.
 
 ## Install
 
@@ -91,6 +97,10 @@ fastci test --dry-run -v
 
 # Bypass impact analysis and run everything
 fastci test --all
+
+# Safety net: run everything anyway if a diff this broad touched >=30% of
+# tracked source files, rather than trusting per-file narrowing on it
+fastci test --full-run-threshold 30
 
 # Forward flags to the underlying test runner
 fastci test -- -race -v        # go test
