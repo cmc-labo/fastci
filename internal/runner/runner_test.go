@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -78,5 +81,72 @@ func TestRunKillsWholeProcessGroupOnCancel(t *testing.T) {
 func TestRunEmptyArgv(t *testing.T) {
 	if err := runner.Run(context.Background(), runner.Options{}); err == nil {
 		t.Error("Run with empty Argv should return an error")
+	}
+}
+
+// openPTY opens a fresh pseudo-terminal and returns its master fd and the
+// path to the corresponding slave device.
+func openPTY(t *testing.T) (master *os.File, slavePath string) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open /dev/ptmx: %v", err)
+	}
+	t.Cleanup(func() { m.Close() })
+
+	if err := unix.IoctlSetPointerInt(int(m.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Fatalf("unlock pty: %v", err)
+	}
+	n, err := unix.IoctlGetInt(int(m.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Fatalf("get pty number: %v", err)
+	}
+	return m, fmt.Sprintf("/dev/pts/%d", n)
+}
+
+// TestRunSkipsProcessGroupIsolationWithControllingTerminal guards against a
+// regression from the process-group isolation fix above: with a real
+// controlling terminal on stdin, Run must NOT put the child in its own
+// process group. A background process group that tries to read from the
+// controlling terminal is stopped by SIGTTIN (hit by, e.g., a pytest test
+// that drops into a debugger breakpoint) - this was reproduced manually
+// (a pty-attached fastci run hung indefinitely once the child tried to
+// read stdin) before this guard was added.
+func TestRunSkipsProcessGroupIsolationWithControllingTerminal(t *testing.T) {
+	_, slavePath := openPTY(t)
+	slave, err := os.OpenFile(slavePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open pty slave: %v", err)
+	}
+	defer slave.Close()
+
+	orig := os.Stdin
+	os.Stdin = slave
+	defer func() { os.Stdin = orig }()
+
+	ownPgid, err := unix.Getpgid(0)
+	if err != nil {
+		t.Fatalf("Getpgid: %v", err)
+	}
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "pgid.txt")
+	script := "ps -o pgid= -p $$ | tr -d ' ' > " + outFile
+
+	if err := runner.Run(context.Background(), runner.Options{Dir: dir, Argv: []string{"sh", "-c", script}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("reading child's reported pgid: %v", err)
+	}
+	childPgid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parsing child's reported pgid %q: %v", data, err)
+	}
+
+	if childPgid != ownPgid {
+		t.Errorf("child's process group = %d, want %d (this test's own group) - it must not be isolated into a new group while a controlling terminal is attached", childPgid, ownPgid)
 	}
 }
