@@ -102,6 +102,11 @@ fastci test --all
 # tracked source files, rather than trusting per-file narrowing on it
 fastci test --full-run-threshold 30
 
+# Explain why a file/package/crate was (or wasn't) selected - diagnostic
+# only, doesn't run any tests
+fastci test --why src/consumer.test.ts
+fastci test --why internal/impact          # a Go import path works too
+
 # Forward flags to the underlying test runner
 fastci test -- -race -v        # go test
 fastci test -- --coverage      # vitest run / jest
@@ -181,6 +186,23 @@ dynamic-import notes under [Current limitations](#current-limitations)) and
 are always included as a safety net; unmarked lines are pulled in
 transitively because they depend on something that changed (directly, or
 via a `~` line).
+
+An unmarked line's exact dependency chain, or why some file *isn't* in the
+list at all, can be checked directly with `--why`:
+
+```
+$ fastci test --why src/consumer.test.ts
+fastci: why is "src/consumer.test.ts" selected?
+  Selected because of this dependency chain:
+    src/leaf.ts (changed)
+    -> src/mid.ts
+    -> src/consumer.ts
+    -> src/consumer.test.ts
+
+$ fastci test --why src/isolated.test.ts
+fastci: why is "src/isolated.test.ts" selected?
+  NOT selected: no changed file's effect reaches this target through the dependency graph.
+```
 
 ## GitHub Actions
 

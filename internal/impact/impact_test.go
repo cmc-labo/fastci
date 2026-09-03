@@ -50,6 +50,42 @@ func TestComputeTransitiveImpact(t *testing.T) {
 	}
 }
 
+func TestComputeReasonsExplainSelectionChain(t *testing.T) {
+	g, dir := loadSampleGraph(t)
+
+	// pkgc is a leaf dependency of pkgb, which is a dependency of pkga:
+	// pkgc <- pkgb <- pkga. Changing pkgc must produce a Reasons chain for
+	// each of them tracing back to pkgc itself, in that order.
+	res := impact.Compute(g, []string{filepath.Join(dir, "pkgc", "pkgc.go")}, goAnalyzer)
+	if res.FullRun {
+		t.Fatalf("unexpected full run, reasons: %v", res.FullRunReasons)
+	}
+
+	wantChains := map[string][]string{
+		"samplemod/pkgc": {"samplemod/pkgc"},
+		"samplemod/pkgb": {"samplemod/pkgc", "samplemod/pkgb"},
+		"samplemod/pkga": {"samplemod/pkgc", "samplemod/pkgb", "samplemod/pkga"},
+	}
+	for target, want := range wantChains {
+		got, ok := res.Reasons[target]
+		if !ok {
+			t.Errorf("Reasons[%s] missing", target)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Reasons[%s] = %v, want %v", target, got, want)
+		}
+	}
+
+	// pkgd/pkge form a separate, unrelated cluster - neither should have a
+	// Reasons entry at all when only pkgc changed.
+	for _, unaffected := range []string{"samplemod/pkgd", "samplemod/pkge"} {
+		if chain, ok := res.Reasons[unaffected]; ok {
+			t.Errorf("Reasons[%s] = %v, want no entry (unaffected by this change)", unaffected, chain)
+		}
+	}
+}
+
 func TestComputeLeafChangeIsIsolated(t *testing.T) {
 	g, dir := loadSampleGraph(t)
 
@@ -297,6 +333,26 @@ func TestComputeJestOpaqueDynamicImportAlwaysIncluded(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.UncertainTargets, wantUncertain) {
 		t.Errorf("UncertainTargets = %v, want %v", res.UncertainTargets, wantUncertain)
+	}
+
+	// unrelated.test.ts was reached through a real change (unrelated.ts);
+	// opaque.test.ts was reached only through opaque.ts's own unresolvable
+	// dynamic import, so the chain must start at opaque.ts itself, not at
+	// the file that was actually edited.
+	wantReasons := map[string][]string{
+		filepath.Join(dir, "src", "unrelated.test.ts"): {
+			filepath.Join(dir, "src", "unrelated.ts"),
+			filepath.Join(dir, "src", "unrelated.test.ts"),
+		},
+		filepath.Join(dir, "src", "opaque.test.ts"): {
+			filepath.Join(dir, "src", "opaque.ts"),
+			filepath.Join(dir, "src", "opaque.test.ts"),
+		},
+	}
+	for target, want := range wantReasons {
+		if got := res.Reasons[target]; !reflect.DeepEqual(got, want) {
+			t.Errorf("Reasons[%s] = %v, want %v", target, got, want)
+		}
 	}
 }
 

@@ -42,6 +42,7 @@ func newTestCmd() *cobra.Command {
 		all                 bool
 		verbose             bool
 		fullRunThresholdPct float64
+		why                 string
 	)
 
 	cmd := &cobra.Command{
@@ -73,6 +74,7 @@ e.g.:
 				all:                 all,
 				verbose:             verbose,
 				fullRunThresholdPct: fullRunThresholdPct,
+				why:                 why,
 				extraArgs:           args,
 			})
 		},
@@ -84,6 +86,8 @@ e.g.:
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print the changed files and full selection reasoning")
 	cmd.Flags().Float64Var(&fullRunThresholdPct, "full-run-threshold", 0,
 		"if this many percent (0-100) of tracked source files changed, run the full suite instead of narrowing - a safety net against a diff too broad for per-file attribution to be meaningful. A change transitively affecting many tests through the dependency graph (e.g. a shared core library) is already handled precisely without this flag; it exists for diffs so broad that narrowing itself is the risk. 0 (default) disables this check.")
+	cmd.Flags().StringVar(&why, "why", "",
+		"explain why the given file (or, for Go/Cargo, package import path/crate name) was or wasn't selected, showing the dependency chain back to the changed file responsible - or that no changed file reaches it at all. Diagnostic only: doesn't run any tests.")
 
 	return cmd
 }
@@ -94,6 +98,7 @@ type testOpts struct {
 	all                 bool
 	verbose             bool
 	fullRunThresholdPct float64
+	why                 string
 	extraArgs           []string
 }
 
@@ -154,6 +159,10 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 			result.FullRun = true
 			result.FullRunReasons = []string{reason}
 		}
+	}
+
+	if opts.why != "" {
+		return explainWhy(g, result, cwd, repoRoot, opts.why)
 	}
 
 	if result.FullRun {
@@ -256,6 +265,90 @@ func fullRunThresholdReason(g *graph.Graph, changed []string, a analyzer.Analyze
 	}
 	return fmt.Sprintf("%d/%d tracked source file(s) changed (%.0f%%), at or above --full-run-threshold=%.0f%%",
 		trackedChanged, totalFiles, pct, thresholdPct), true
+}
+
+// explainWhy resolves query to a graph node (trying it first as a file path
+// relative to cwd, then as a literal node ID - a Go import path or Cargo
+// crate name, for analyzers where a node isn't a single file) and prints
+// why it was, or wasn't, selected: the dependency chain back to whichever
+// changed file (or unresolvable dynamic import) is responsible, or an
+// explicit statement that no changed file reaches it at all.
+func explainWhy(g *graph.Graph, result impact.Result, cwd, repoRoot, query string) error {
+	target, ok := resolveQuery(g, cwd, query)
+	if !ok {
+		return fmt.Errorf("--why: %q doesn't match any tracked file or node in this project", query)
+	}
+	fmt.Printf("fastci: why is %q selected?\n", relOrSelf(repoRoot, target))
+
+	if result.FullRun {
+		fmt.Println("  --all/full-run is in effect, so every test target runs regardless of the dependency graph. Reason(s):")
+		for _, r := range result.FullRunReasons {
+			if filepath.IsAbs(r) {
+				r = relOrSelf(repoRoot, r)
+			}
+			fmt.Printf("    - %s\n", r)
+		}
+		return nil
+	}
+
+	chain, ok := result.Reasons[target]
+	if !ok {
+		fmt.Println("  NOT selected: no changed file's effect reaches this target through the dependency graph.")
+		return nil
+	}
+
+	changedSet := make(map[string]bool, len(result.ChangedTargets))
+	for _, t := range result.ChangedTargets {
+		changedSet[t] = true
+	}
+	uncertainSet := make(map[string]bool, len(result.UncertainTargets))
+	for _, t := range result.UncertainTargets {
+		uncertainSet[t] = true
+	}
+
+	if n := g.Nodes[target]; n == nil || !n.HasTestFiles {
+		fmt.Println("  Affected, but has no test files of its own, so nothing actually runs for it - shown for context:")
+	} else if changedSet[target] {
+		fmt.Println("  Selected: it changed directly.")
+		return nil
+	} else if uncertainSet[target] {
+		fmt.Println("  Selected as a safety net: it (or something it imports) contains an import fastci can't statically resolve, so it's always run when anything in the project changes:")
+	} else {
+		fmt.Println("  Selected because of this dependency chain:")
+	}
+
+	seed := chain[0]
+	seedDesc := "changed"
+	if g.Nodes[seed] != nil && g.Nodes[seed].HasDynamicImport && !changedSet[seed] {
+		seedDesc = "unresolvable dynamic import"
+	}
+	for i, id := range chain {
+		rel := relOrSelf(repoRoot, id)
+		if i == 0 {
+			fmt.Printf("    %s (%s)\n", rel, seedDesc)
+			continue
+		}
+		fmt.Printf("    -> %s\n", rel)
+	}
+	return nil
+}
+
+// resolveQuery resolves a --why argument to a graph node ID: first as a
+// file path (relative to cwd if not already absolute), then, if that
+// doesn't match, as a literal node ID for analyzers whose nodes aren't
+// individual files (a Go import path, a Cargo crate name).
+func resolveQuery(g *graph.Graph, cwd, query string) (id string, ok bool) {
+	abs := query
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(cwd, abs)
+	}
+	if id, ok := g.TargetForFile(abs); ok {
+		return id, true
+	}
+	if _, ok := g.Nodes[query]; ok {
+		return query, true
+	}
+	return "", false
 }
 
 func relOrSelf(base, path string) string {
