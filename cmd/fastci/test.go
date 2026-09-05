@@ -118,6 +118,15 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		return fmt.Errorf("resolving git repository root: %w", err)
 	}
 
+	if opts.all && opts.why != "" {
+		// --why promises to be diagnostic-only; --all bypasses impact
+		// analysis entirely, so there's no dependency-graph reasoning to
+		// show and, without this check, --why would otherwise be silently
+		// ignored while the full suite ran anyway.
+		fmt.Printf("fastci: --all bypasses impact analysis entirely, so %q (like everything else) would run regardless of the dependency graph - nothing to explain\n", opts.why)
+		return nil
+	}
+
 	if opts.all {
 		fmt.Printf("fastci: --all set, running the full test suite (%s)\n", a.Name())
 		if opts.dryRun {
