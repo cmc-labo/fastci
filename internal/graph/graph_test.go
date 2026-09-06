@@ -50,3 +50,41 @@ func TestTargetForFileDirFallbackDisabled(t *testing.T) {
 		t.Errorf("TargetForFile(%q) = %q, %v; want %q, true", bFile, target, ok, bFile)
 	}
 }
+
+func TestTargetForDir(t *testing.T) {
+	// child's files live in dir/pkg, a subdirectory of parent's dir. Both
+	// must resolve to their own node from their own directory - in
+	// particular, querying dir/pkg must never fall back to parent, the way
+	// TargetForFile(dir/pkg) would if pkg were mistaken for a filename and
+	// stripped via filepath.Dir.
+	dir := t.TempDir()
+	parentFile := dir + "/parent.go"
+	childFile := dir + "/pkg/child.go"
+
+	g := graph.New()
+	g.Node("parent").Files = []string{parentFile}
+	g.Node("child").Files = []string{childFile}
+	g.IndexFiles()
+
+	if target, ok := g.TargetForDir(dir); !ok || target != "parent" {
+		t.Errorf("TargetForDir(%q) = %q, %v; want %q, true", dir, target, ok, "parent")
+	}
+	if target, ok := g.TargetForDir(dir + "/pkg"); !ok || target != "child" {
+		t.Errorf("TargetForDir(%q) = %q, %v; want %q, true", dir+"/pkg", target, ok, "child")
+	}
+	if _, ok := g.TargetForDir(dir + "/nonexistent"); ok {
+		t.Error("TargetForDir resolved a directory with no files in it - want false")
+	}
+}
+
+func TestTargetForDirDisabledByDirFallback(t *testing.T) {
+	dir := t.TempDir()
+	g := graph.New()
+	g.DisableDirFallback = true
+	g.Node("pkg").Files = []string{dir + "/f.ts"}
+	g.IndexFiles()
+
+	if _, ok := g.TargetForDir(dir); ok {
+		t.Error("TargetForDir resolved a directory despite DisableDirFallback - it must report unresolved instead")
+	}
+}

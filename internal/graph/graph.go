@@ -112,6 +112,24 @@ func (g *Graph) TargetForFile(absPath string) (id string, ok bool) {
 	return "", false
 }
 
+// TargetForDir resolves an absolute directory path (the directory itself,
+// not a file within it - callers must not run this through filepath.Dir
+// first) to the ID of the Node it belongs to, when every one of that
+// node's files lives directly in dir. ok is false if dir isn't home to
+// exactly one node - including when DisableDirFallback is set, for the
+// same reason TargetForFile's own directory fallback is disabled there:
+// file-granularity analyzers (Jest, Vitest, pytest) have no notion of "the
+// one node for this directory" at all.
+func (g *Graph) TargetForDir(dir string) (id string, ok bool) {
+	if g.DisableDirFallback {
+		return "", false
+	}
+	if targets := g.dirToNodes[dir]; len(targets) == 1 {
+		return targets[0], true
+	}
+	return "", false
+}
+
 // TestNodeIDs returns the sorted IDs of every Node that has test files.
 func (g *Graph) TestNodeIDs() []string {
 	var out []string

@@ -76,6 +76,40 @@ func TestFullRunThresholdReasonEmptyGraph(t *testing.T) {
 	}
 }
 
+// TestResolveQueryDirectoryDoesNotMisresolveToParentPackage guards against a
+// real bug: passing an existing *directory* (e.g. a Go package like
+// "internal/analyzer/cargoanalyzer") went through TargetForFile, which
+// always strips one path component via filepath.Dir expecting a file path -
+// silently resolving to the directory's *parent* package instead, with no
+// indication anything went wrong.
+func TestResolveQueryDirectoryDoesNotMisresolveToParentPackage(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parentFile := filepath.Join(cwd, "parent.go")
+	childFile := filepath.Join(cwd, "child", "child.go")
+	if err := os.WriteFile(parentFile, []byte("package parent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childFile, []byte("package child\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g := graph.New()
+	g.Node("parent").Files = []string{parentFile}
+	g.Node("child").Files = []string{childFile}
+	g.IndexFiles()
+
+	got, ok := resolveQuery(g, cwd, "child")
+	if !ok {
+		t.Fatal("resolveQuery = false, want true")
+	}
+	if got != "child" {
+		t.Errorf(`resolveQuery(%q) = %q, want "child" - it must not silently resolve to the parent directory's package`, "child", got)
+	}
+}
+
 // runGitT runs git in dir, failing the test on error.
 func runGitT(t *testing.T, dir string, args ...string) {
 	t.Helper()

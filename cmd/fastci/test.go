@@ -351,7 +351,17 @@ func resolveQuery(g *graph.Graph, cwd, query string) (id string, ok bool) {
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(cwd, abs)
 	}
-	if id, ok := g.TargetForFile(abs); ok {
+	// A directory must resolve via TargetForDir, not TargetForFile: the
+	// latter always strips one path component (filepath.Dir) expecting a
+	// *file* path, so handing it a directory silently resolves to that
+	// directory's *parent* package/crate instead - a real, silent wrong
+	// answer for e.g. "--why internal/analyzer/cargoanalyzer" when Go's
+	// tracked source set makes that path a directory, not a file.
+	if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
+		if id, ok := g.TargetForDir(abs); ok {
+			return id, true
+		}
+	} else if id, ok := g.TargetForFile(abs); ok {
 		return id, true
 	}
 	if _, ok := g.Nodes[query]; ok {
