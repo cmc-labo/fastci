@@ -1,8 +1,10 @@
 package pytestanalyzer_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
 )
@@ -131,5 +133,69 @@ func TestBuildResolvesRelativeAndAbsoluteImports(t *testing.T) {
 	}
 	if g.Nodes[leaf].HasTestFiles {
 		t.Error("leaf.py should not be classified as a test file")
+	}
+}
+
+// writePy writes content to rel (relative to dir), creating parent
+// directories as needed.
+func writePy(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBuildCachesImportResolutionAcrossRuns guards the AST-parse cache
+// (internal/analyzer/pytestanalyzer/resolve_imports.py): repeated Build()
+// calls against an unchanged project must keep producing the same graph,
+// a persistent .fastci-cache must appear, and editing a single file's
+// content must still be picked up on the next Build() (the cache must
+// never serve stale results for a file that actually changed).
+func TestBuildCachesImportResolutionAcrossRuns(t *testing.T) {
+	dir := t.TempDir()
+	writePy(t, dir, "pyproject.toml", "[tool.pytest.ini_options]\n")
+	writePy(t, dir, "leaf.py", "def hello():\n    return 'v1'\n")
+	writePy(t, dir, "consumer.py", "from leaf import hello\n")
+
+	a := pytestanalyzer.New()
+
+	g1, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build (1st): %v", err)
+	}
+	leaf := filepath.Join(dir, "leaf.py")
+	consumer := filepath.Join(dir, "consumer.py")
+	if !g1.Nodes[consumer].Imports[leaf] {
+		t.Fatal("consumer.py should import leaf.py on the first (uncached) run")
+	}
+
+	cacheFile := filepath.Join(dir, ".fastci-cache", "pytest-imports.json")
+	if _, err := os.Stat(cacheFile); err != nil {
+		t.Fatalf(".fastci-cache/pytest-imports.json was not created: %v", err)
+	}
+
+	g2, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build (2nd, cache hit): %v", err)
+	}
+	if !g2.Nodes[consumer].Imports[leaf] {
+		t.Error("consumer.py should still import leaf.py on a cached run")
+	}
+
+	// Ensure the next write lands on a distinguishable mtime even on
+	// filesystems with coarse mtime resolution.
+	time.Sleep(1100 * time.Millisecond)
+	writePy(t, dir, "consumer.py", "# consumer.py no longer imports leaf\n")
+
+	g3, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build (3rd, after edit): %v", err)
+	}
+	if g3.Nodes[consumer].Imports[leaf] {
+		t.Error("consumer.py's edit must be picked up, not served stale from cache: it no longer imports leaf.py")
 	}
 }

@@ -352,6 +352,19 @@ error rather than a bare `git` failure.
   overrides in `pytest.ini`/`pyproject.toml`/`setup.cfg` aren't honored
   yet — such a project still works, but test-file classification falls
   back to the defaults.
+- AST parsing is cached per file in `<project>/.fastci-cache/pytest-imports.json`,
+  keyed by each file's mtime and size — a file whose (mtime, size) hasn't
+  changed since the cache was written reuses its previous result instead of
+  being re-parsed. Adding, removing, or renaming any `.py` file anywhere in
+  the project invalidates the whole cache for that run (a full reparse,
+  same as no cache at all) rather than risk reusing a resolution a changed
+  registry could have made stale. This is a fast check, not a content
+  hash: a file edited twice within the same mtime tick that also happens to
+  land on the exact same byte size (rare) could be missed — delete
+  `.fastci-cache/` to force a full reparse if that's ever a concern. The
+  cache directory is git-ignored automatically (it writes its own
+  `.gitignore`), so nothing needs to be done to keep it out of version
+  control.
 - Building the graph requires a `python3` (or `python`) interpreter on
   `PATH`; running tests additionally looks for `.venv/bin/pytest`,
   `venv/bin/pytest`, or `env/bin/pytest` before falling back to `pytest`/
