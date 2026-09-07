@@ -137,7 +137,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		if err != nil {
 			return err
 		}
-		return a.RunTests(cmd.Context(), cwd, allTargets, opts.extraArgs)
+		return runAndRecord(cmd.Context(), repoRoot, a, cwd, allTargets, opts.extraArgs)
 	}
 
 	changed, err := gitdiff.ChangedFiles(repoRoot, opts.base)
@@ -189,7 +189,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 			fmt.Println("fastci: dry-run, not executing tests")
 			return nil
 		}
-		return a.RunTests(cmd.Context(), cwd, result.Targets, opts.extraArgs)
+		return runAndRecord(cmd.Context(), repoRoot, a, cwd, result.Targets, opts.extraArgs)
 	}
 
 	if len(result.Targets) == 0 {
@@ -234,7 +234,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		return nil
 	}
 
-	return a.RunTests(cmd.Context(), cwd, result.Targets, opts.extraArgs)
+	return runAndRecord(cmd.Context(), repoRoot, a, cwd, result.Targets, opts.extraArgs)
 }
 
 // fullRunThresholdReason reports whether the fraction of changed files that

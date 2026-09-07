@@ -204,6 +204,44 @@ fastci: why is "src/isolated.test.ts" selected?
   NOT selected: no changed file's effect reaches this target through the dependency graph.
 ```
 
+### `fastci analyze`
+
+When `fastci test` fails, it saves the failing run's combined output to
+`.fastci-cache/last-failure.json` (git-ignored automatically, same as the
+[pytest AST cache](#current-limitations)). `fastci analyze` reads that and
+asks Claude to diagnose it:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+fastci test        # fails
+fastci analyze      # asks Claude why, using the failure fastci test just captured
+```
+
+```
+$ fastci analyze
+fastci: asking claude-sonnet-5 about the go failure from 2026-09-08 08:24:44...
+
+Root cause: pkga.A() returns 1 but the test expects 2. Fix: either update
+A() to return 2, or fix the test's expected value if 1 is actually correct.
+```
+
+If the last `fastci test` run passed (or none has run yet), `analyze` just
+says so — there's nothing to diagnose. Options:
+
+```sh
+fastci analyze --model claude-opus-5   # a different model
+fastci analyze --max-tokens 2048       # allow a longer response
+```
+
+**This makes a real, billed network request to `api.anthropic.com`.** It
+requires `ANTHROPIC_API_KEY` in the environment, and only ever runs when you
+explicitly invoke `fastci analyze` — never automatically as part of
+`fastci test`. The captured output sent to Anthropic can include file paths,
+source snippets, or other project-specific content from your test run;
+don't run it on output you wouldn't want leaving your machine.
+(`ANTHROPIC_BASE_URL` is also honored, for a proxy or an API-compatible
+alternative endpoint.)
+
 ## GitHub Actions
 
 ```yaml
@@ -398,7 +436,9 @@ This tracks the phased plan in the project design doc:
 - **Phase 1 (V1.0)** — Impact-Driven Test Runner (this) + a distributed
   build/dependency cache.
 - **Phase 2 (V1.5)** — `fastci analyze`: AI-assisted failure log analysis
-  and fix suggestions.
+  and fix suggestions. Implemented — see [Usage](#usage) and
+  [`fastci analyze`](#fastci-analyze) below; the distributed build/dependency
+  cache from Phase 1 is still outstanding.
 - **Phase 3 (V2.0)** — `fastci local` (fast local CI reproduction) and
   `fastci guard` (supply-chain / runtime security guardrails).
 
