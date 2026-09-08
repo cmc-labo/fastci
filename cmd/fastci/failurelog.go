@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hpscript/fastci/internal/analyzer"
 )
@@ -19,6 +20,22 @@ import (
 // is almost always near the end, so the *tail* is kept when output is
 // larger than this.
 const failureLogMaxOutput = 50_000
+
+// truncateUTF8Tail returns the last max bytes of s, advanced past any
+// leading UTF-8 continuation bytes so a plain byte-offset cut never splits
+// a multi-byte rune in half - which would otherwise leave a stray invalid
+// leading fragment (silently rendered as one "�" replacement
+// character by both encoding/json and the Anthropic API request built from
+// it - not a crash, but real, avoidable corruption of the captured text
+// right at the cut point).
+func truncateUTF8Tail(s []byte, max int) []byte {
+	s = s[len(s)-max:]
+	i := 0
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return s[i:]
+}
 
 // failureLog is the on-disk record `fastci test` leaves behind when a run
 // fails, for `fastci analyze` to pick up afterward.
@@ -60,7 +77,7 @@ func runAndRecord(ctx context.Context, repoRoot string, a analyzer.Analyzer, cwd
 
 	truncated := false
 	if len(output) > failureLogMaxOutput {
-		output = output[len(output)-failureLogMaxOutput:]
+		output = truncateUTF8Tail(output, failureLogMaxOutput)
 		truncated = true
 	}
 	rec := failureLog{

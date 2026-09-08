@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/hpscript/fastci/internal/graph"
 )
@@ -122,6 +123,35 @@ func TestRunAndRecordTruncatesLargeOutputKeepingTail(t *testing.T) {
 	}
 	if !strings.HasSuffix(rec.Output, "TAIL_MARKER") {
 		t.Error("truncation must keep the tail of the output, not the head")
+	}
+}
+
+// TestTruncateUTF8TailNeverSplitsARune guards against a real bug: a plain
+// byte-offset cut (output[len(output)-max:]) can land in the middle of a
+// multi-byte UTF-8 rune (e.g. non-ASCII text in a failure message or file
+// path), leaving an invalid leading byte sequence that both encoding/json
+// and the Anthropic API request silently render as a corrupted "�"
+// character right at the truncation point.
+func TestTruncateUTF8TailNeverSplitsARune(t *testing.T) {
+	base := strings.Repeat("x", 100) + "日本語のテスト失敗メッセージ" + strings.Repeat("y", 100)
+	// Sweep every possible cap so at least one lands mid-rune (confirmed by
+	// direct byte slicing, exercised below as a sanity check of the test
+	// itself), and verify truncateUTF8Tail is valid UTF-8 for all of them.
+	sawInvalidNaiveCut := false
+	for max := 1; max < len(base); max++ {
+		if naive := base[len(base)-max:]; !utf8.ValidString(naive) {
+			sawInvalidNaiveCut = true
+		}
+		got := truncateUTF8Tail([]byte(base), max)
+		if !utf8.Valid(got) {
+			t.Fatalf("truncateUTF8Tail(base, %d) = %q, not valid UTF-8", max, got)
+		}
+		if !strings.HasSuffix(base, string(got)) {
+			t.Fatalf("truncateUTF8Tail(base, %d) = %q is not a suffix of the input", max, got)
+		}
+	}
+	if !sawInvalidNaiveCut {
+		t.Fatal("test setup: no cap value produced an invalid naive byte cut - this test isn't exercising the bug")
 	}
 }
 
