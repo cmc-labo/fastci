@@ -164,6 +164,13 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 
 	for _, c := range crates {
 		n := g.Nodes[c.name]
+		// Registering the manifest itself (rather than just the .rs files
+		// under c.dir/src, c.dir/tests, ...) is what makes IndexFiles below
+		// map the crate's own root directory - where Cargo.toml lives, the
+		// natural thing to pass to `fastci test --why` - to this node.
+		// Without it, only c.dir's src/tests subdirectories would resolve,
+		// since no .rs file lives directly in c.dir itself.
+		n.Files = append(n.Files, filepath.Join(c.dir, "Cargo.toml"))
 		n.HasTestFiles = crateHasTests(c.dir, n.Files)
 	}
 

@@ -96,3 +96,24 @@ func TestTargetForFile(t *testing.T) {
 		t.Errorf("TargetForFile(%s) = %q, %v; want mid, true", f, target, ok)
 	}
 }
+
+// TestTargetForDirResolvesCrateRoot guards against a real bug: only the
+// crate's src/tests/... subdirectories (where its .rs files actually live)
+// were registered in the graph's directory index, not the crate root
+// itself - where Cargo.toml lives, and the natural thing to pass to
+// `fastci test --why`. TargetForDir(crate root) resolved to nothing at
+// all.
+func TestTargetForDirResolvesCrateRoot(t *testing.T) {
+	dir := sampleCargoDir(t)
+	a := cargoanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	crateRoot := filepath.Join(dir, "crates", "mid")
+	target, ok := g.TargetForDir(crateRoot)
+	if !ok || target != "mid" {
+		t.Errorf("TargetForDir(%s) = %q, %v; want mid, true", crateRoot, target, ok)
+	}
+}
