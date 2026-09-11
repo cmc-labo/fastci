@@ -2,7 +2,6 @@ package runner_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -88,20 +87,12 @@ func TestRunEmptyArgv(t *testing.T) {
 // path to the corresponding slave device.
 func openPTY(t *testing.T) (master *os.File, slavePath string) {
 	t.Helper()
-	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	m, slavePath, err := runner.OpenPTY()
 	if err != nil {
-		t.Fatalf("open /dev/ptmx: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Close() })
-
-	if err := unix.IoctlSetPointerInt(int(m.Fd()), unix.TIOCSPTLCK, 0); err != nil {
-		t.Fatalf("unlock pty: %v", err)
-	}
-	n, err := unix.IoctlGetInt(int(m.Fd()), unix.TIOCGPTN)
-	if err != nil {
-		t.Fatalf("get pty number: %v", err)
-	}
-	return m, fmt.Sprintf("/dev/pts/%d", n)
+	return m, slavePath
 }
 
 // TestRunSkipsProcessGroupIsolationWithControllingTerminal guards against a

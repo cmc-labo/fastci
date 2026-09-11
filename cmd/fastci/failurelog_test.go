@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/hpscript/fastci/internal/graph"
+	"github.com/hpscript/fastci/internal/runner"
 )
 
 // fakeRunTestsAnalyzer is a minimal analyzer.Analyzer stub whose RunTests
@@ -51,6 +54,50 @@ func TestCaptureOutputForwardsAndCaptures(t *testing.T) {
 	})
 	if forwarded != "hello from inside" {
 		t.Errorf("output not forwarded to the real stdout: got %q", forwarded)
+	}
+}
+
+// TestCaptureOutputPreservesTerminalForColorDetection guards against a real
+// bug: captureOutput unconditionally used a plain os.Pipe for the child,
+// which many test runners (cargo test, pytest, jest/vitest) detect via
+// isatty(stdout) to decide whether to emit ANSI color - silently turning
+// color off even in a fully interactive session, purely because this
+// capture-for-`fastci analyze` mechanism existed. With a real terminal on
+// the actual stdout, fn must still see a terminal.
+func TestCaptureOutputPreservesTerminalForColorDetection(t *testing.T) {
+	master, slavePath, err := runner.OpenPTY()
+	if err != nil {
+		t.Skipf("no pty support in this environment: %v", err)
+	}
+	defer master.Close()
+	slave, err := os.OpenFile(slavePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slave.Close()
+	go io.Copy(io.Discard, master) // drain so writes to the outer "terminal" never block
+
+	origStdout := os.Stdout
+	os.Stdout = slave
+	defer func() { os.Stdout = origStdout }()
+
+	var sawTerminal bool
+	captured, err := captureOutput(func() error {
+		sawTerminal = runner.IsTerminal(os.Stdout)
+		fmt.Print("line one\nline two\n")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("captureOutput: %v", err)
+	}
+	if !sawTerminal {
+		t.Error("fn's os.Stdout was not a terminal - captureOutput must preserve TTY-ness when the real stdout is one, or color-detecting test runners silently lose their ANSI output")
+	}
+	// Also guards the ONLCR fix: relaying an inner pty's own "\n"->"\r\n"
+	// translation through the outer terminal's *own* identical translation
+	// would otherwise double the "\r" on every line.
+	if bytes.Contains(captured, []byte("\r\r\n")) {
+		t.Errorf("captured output contains a doubled \\r (%q) - the inner pty's ONLCR must be disabled before relaying through a real terminal", captured)
 	}
 }
 

@@ -11,7 +11,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/runner"
 )
 
 // failureLogMaxOutput caps how much of a run's combined stdout/stderr gets
@@ -141,7 +144,82 @@ func readFailureLog(repoRoot string) (failureLog, error) {
 // slice, while still reaching the user's real terminal immediately and
 // unmodified. The original streams are restored before returning, even if
 // fn panics.
+//
+// When the real stdout is a terminal, the child is given a pseudo-terminal
+// rather than a plain pipe: cargo test, pytest, and jest/vitest all check
+// isatty(stdout) to decide whether to emit ANSI color, and a plain pipe -
+// even in a fully interactive session - would silently turn that off
+// purely because this capture-for-`fastci analyze` mechanism exists.
 func captureOutput(fn func() error) ([]byte, error) {
+	if runner.IsTerminal(os.Stdout) {
+		if buf, err, ok := captureOutputPTY(fn); ok {
+			return buf, err
+		}
+		// PTY allocation failed (e.g. no /dev/ptmx) - fall through to the
+		// plain-pipe path rather than losing capture entirely.
+	}
+	return captureOutputPipe(fn)
+}
+
+// captureOutputPTY is captureOutput's terminal-preserving path. ok is false
+// if the pty itself couldn't be set up, in which case fn was NOT run yet
+// and the caller should fall back to captureOutputPipe.
+func captureOutputPTY(fn func() error) (output []byte, runErr error, ok bool) {
+	master, slavePath, err := runner.OpenPTY()
+	if err != nil {
+		return nil, nil, false
+	}
+	defer master.Close()
+
+	slave, err := os.OpenFile(slavePath, os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, false
+	}
+	// The child's own pty already turns its "\n" into "\r\n" (ONLCR, on by
+	// default); relaying that through the real terminal - which applies
+	// the same translation again on every write - would double the "\r"
+	// on every line. Disabling ONLCR here means the child's "\n" passes
+	// through unchanged, so the real terminal's own translation is the
+	// only one that ever runs.
+	disableONLCR(slave)
+
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = slave, slave
+	var buf bytes.Buffer
+	copyDone := make(chan struct{})
+	go func() {
+		io.Copy(io.MultiWriter(origOut, &buf), master)
+		close(copyDone)
+	}()
+
+	runErr = func() error {
+		defer func() {
+			os.Stdout, os.Stderr = origOut, origErr
+			slave.Close()
+		}()
+		return fn()
+	}()
+	<-copyDone
+
+	return buf.Bytes(), runErr, true
+}
+
+// disableONLCR clears the pty's ONLCR output flag (best-effort - a failure
+// here just means the double-"\r" cosmetic quirk described above isn't
+// worth aborting the capture over).
+func disableONLCR(f *os.File) {
+	t, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
+	if err != nil {
+		return
+	}
+	t.Oflag &^= unix.ONLCR
+	_ = unix.IoctlSetTermios(int(f.Fd()), unix.TCSETS, t)
+}
+
+// captureOutputPipe is captureOutput's fallback path for when stdout isn't
+// a terminal (the normal CI case: there's no color/isatty behavior to
+// preserve, since the child would see a non-terminal stdout either way).
+func captureOutputPipe(fn func() error) ([]byte, error) {
 	origOut, origErr := os.Stdout, os.Stderr
 	r, w, pipeErr := os.Pipe()
 	if pipeErr != nil {
