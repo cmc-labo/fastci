@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +24,26 @@ import (
 // is almost always near the end, so the *tail* is kept when output is
 // larger than this.
 const failureLogMaxOutput = 50_000
+
+// ANSI escape sequences (SGR color codes, OSC hyperlinks, character-set
+// selection) that survive into the captured copy now that captureOutput
+// gives an interactive run's child a real pty (see captureOutputPTY) to
+// keep its live-forwarded colors intact. They render as illegible
+// \x1b[...m noise once written to JSON or sent as a plain-text prompt to
+// the Anthropic API, so they're stripped from the *persisted/analyzed*
+// copy only - the live terminal forward is untouched and stays colored.
+var (
+	ansiOSC     = regexp.MustCompile(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)
+	ansiCSI     = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+	ansiCharset = regexp.MustCompile(`\x1b[()][A-Za-z0-9]`)
+)
+
+func stripANSI(s []byte) []byte {
+	s = ansiOSC.ReplaceAll(s, nil)
+	s = ansiCSI.ReplaceAll(s, nil)
+	s = ansiCharset.ReplaceAll(s, nil)
+	return s
+}
 
 // truncateUTF8Tail returns the last max bytes of s, advanced past any
 // leading UTF-8 continuation bytes so a plain byte-offset cut never splits
@@ -77,6 +98,8 @@ func runAndRecord(ctx context.Context, repoRoot string, a analyzer.Analyzer, cwd
 		os.Remove(failureLogPath(repoRoot)) // best-effort: stale failure log would mislead `analyze`.
 		return nil
 	}
+
+	output = stripANSI(output)
 
 	truncated := false
 	if len(output) > failureLogMaxOutput {

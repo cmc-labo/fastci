@@ -202,6 +202,60 @@ func TestTruncateUTF8TailNeverSplitsARune(t *testing.T) {
 	}
 }
 
+// TestStripANSI guards against a real bug introduced by making
+// captureOutput preserve colors for an interactive run (captureOutputPTY):
+// the raw ANSI escape sequences that come along with that now-preserved
+// color output would otherwise end up verbatim in .fastci-cache/last-failure.json
+// and in the plain-text prompt sent to the Anthropic API by `fastci
+// analyze` - illegible \x1b[...m noise there, unlike in a real terminal.
+// This uses the exact escape sequences observed from a real `cargo test`
+// run captured through a pty (SGR color codes, an OSC 8 hyperlink, and a
+// character-set-selection sequence).
+func TestStripANSI(t *testing.T) {
+	input := "\x1b[1m\x1b[32m   Compiling\x1b[0m demo v0.1.0 (/tmp/demo)\n" +
+		"\x1b[1m\x1b[32m    Finished\x1b[0m \x1b]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\x1b\\`test` profile [unoptimized + debuginfo]\x1b]8;;\x1b\\ target(s) in 0.72s\n" +
+		"test tests::test_fail ... \x1b[31mFAILED\x1b(B\x1b[m\n" +
+		"test result: \x1b[31mFAILED\x1b(B\x1b[m. 1 failed\n"
+	want := "   Compiling demo v0.1.0 (/tmp/demo)\n" +
+		"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s\n" +
+		"test tests::test_fail ... FAILED\n" +
+		"test result: FAILED. 1 failed\n"
+
+	got := stripANSI([]byte(input))
+	if string(got) != want {
+		t.Errorf("stripANSI =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRunAndRecordStripsANSIFromPersistedOutput is the integration-level
+// guard for the same bug: a failing run whose captured output contains
+// ANSI codes (as happens whenever captureOutput takes the pty path - see
+// TestCaptureOutputPreservesTerminalForColorDetection) must not leak them
+// into the persisted failureLog.Output.
+func TestRunAndRecordStripsANSIFromPersistedOutput(t *testing.T) {
+	repoRoot := t.TempDir()
+	a := &fakeRunTestsAnalyzer{
+		name:   "cargo",
+		stdout: "test tests::test_fail ... \x1b[31mFAILED\x1b[0m\n",
+		runErr: errors.New("exit status 101"),
+	}
+
+	_ = captureStdoutErr(t, func() error {
+		return runAndRecord(context.Background(), repoRoot, a, repoRoot, nil, nil)
+	})
+
+	rec, err := readFailureLog(repoRoot)
+	if err != nil {
+		t.Fatalf("readFailureLog: %v", err)
+	}
+	if strings.ContainsRune(rec.Output, 0x1b) {
+		t.Errorf("Output = %q still contains a raw ESC byte - it must be stripped before persisting", rec.Output)
+	}
+	if !strings.Contains(rec.Output, "test tests::test_fail ... FAILED") {
+		t.Errorf("Output = %q, want the de-colored text to still be present", rec.Output)
+	}
+}
+
 func TestFailureLogPathIsGitignored(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := writeFailureLog(repoRoot, failureLog{Analyzer: "go"}); err != nil {
