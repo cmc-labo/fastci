@@ -107,6 +107,10 @@ fastci test --full-run-threshold 30
 fastci test --why src/consumer.test.ts
 fastci test --why internal/impact          # a Go import path works too
 
+# Force a real run of everything selected, bypassing the local
+# test-result cache (see below)
+fastci test --no-cache
+
 # Forward flags to the underlying test runner
 fastci test -- -race -v        # go test
 fastci test -- --coverage      # vitest run / jest
@@ -203,6 +207,40 @@ $ fastci test --why src/isolated.test.ts
 fastci: why is "src/isolated.test.ts" selected?
   NOT selected: no changed file's effect reaches this target through the dependency graph.
 ```
+
+### Local test-result cache
+
+Every selected target is checked against a local, content-hash-keyed cache
+(`.fastci-cache/test-results.json`, git-ignored automatically) before it's
+actually run: if the target's own files and everything it transitively
+depends on are byte-for-byte identical to a previous run that passed (under
+the same test-runner invocation), it's skipped entirely rather than
+re-executed. This is a different, more precise mechanism than the
+dependency-graph narrowing `fastci test` already does above — that
+narrowing decides *which targets a diff could possibly affect*; this cache
+asks *have we already seen this exact content pass at all*, so it keeps
+finding things to skip even during a full run (a lockfile change, say,
+forces every target to be considered, but most of them likely didn't
+actually change content):
+
+```
+$ fastci test -v
+fastci: could not safely narrow the test set, running the full suite (go). Reason(s):
+  - go.mod
+fastci: 3/3 target(s) skipped (cache hit - unchanged content already passed): pkga, pkgb, pkgc
+fastci: nothing to run - every selected target was a cache hit
+```
+
+Only a *passing* result is ever trusted — a cached failure never skips a
+run, since that would hide a real problem instead of saving time. A target
+whose dependency graph includes an unresolvable dynamic import (marked `~`
+in the [output legend](#usage) above) is never cached either, for the same
+reason it's always treated as possibly affected there: the graph can't
+prove it has captured that target's full dependency set. `--no-cache`
+bypasses this entirely and always actually runs every selected target.
+
+This is a local-machine cache only — nothing is shared across machines or
+CI runners (yet; see [Roadmap](#roadmap)).
 
 ### `fastci analyze`
 
@@ -434,11 +472,13 @@ error rather than a bare `git` failure.
 This tracks the phased plan in the project design doc:
 
 - **Phase 1 (V1.0)** — Impact-Driven Test Runner (this) + a distributed
-  build/dependency cache.
+  build/dependency cache. The test runner is implemented; the cache is
+  implemented for a single local machine only so far (see
+  [Local test-result cache](#local-test-result-cache) above) — sharing it
+  across machines/CI runners (the "distributed" part) is still outstanding.
 - **Phase 2 (V1.5)** — `fastci analyze`: AI-assisted failure log analysis
   and fix suggestions. Implemented — see [Usage](#usage) and
-  [`fastci analyze`](#fastci-analyze) below; the distributed build/dependency
-  cache from Phase 1 is still outstanding.
+  [`fastci analyze`](#fastci-analyze) below.
 - **Phase 3 (V2.0)** — `fastci local` (fast local CI reproduction) and
   `fastci guard` (supply-chain / runtime security guardrails).
 

@@ -194,3 +194,51 @@ func captureStdout(t *testing.T, fn func()) string {
 	io.Copy(&buf, r)
 	return buf.String()
 }
+
+// TestRunSelectedTargetsSkipsCacheHitsOnSecondRun is the CLI-level
+// integration test for the local test-result cache (internal/testcache):
+// running the exact same targets a second time, with nothing on disk
+// changed, must not invoke RunTests at all - and --no-cache must still
+// force a real run regardless of a valid cache.
+func TestRunSelectedTargetsSkipsCacheHitsOnSecondRun(t *testing.T) {
+	repoRoot := t.TempDir()
+	aFile := filepath.Join(repoRoot, "a.go")
+	bFile := filepath.Join(repoRoot, "b.go")
+	if err := os.WriteFile(aFile, []byte("package p\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bFile, []byte("package p\nfunc B() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := graph.New()
+	g.Node("a").Files = []string{aFile}
+	g.Node("b").Files = []string{bFile}
+
+	a := &fakeRunTestsAnalyzer{name: "go"}
+	run := func(opts testOpts) string {
+		a.callTarget = nil
+		return captureStdout(t, func() {
+			if err := runSelectedTargets(&cobra.Command{}, repoRoot, g, a, repoRoot, []string{"a", "b"}, opts); err != nil {
+				t.Fatalf("runSelectedTargets: %v", err)
+			}
+		})
+	}
+
+	run(testOpts{}) // first run: nothing cached yet, both must actually run.
+	if len(a.callTarget) != 2 {
+		t.Fatalf("first run: RunTests targets = %v, want both a and b", a.callTarget)
+	}
+
+	out := run(testOpts{}) // second run: unchanged content, must be a full cache hit.
+	if len(a.callTarget) != 0 {
+		t.Errorf("second run: RunTests was called with %v, want it skipped entirely (cache hit)", a.callTarget)
+	}
+	if !strings.Contains(out, "cache hit") {
+		t.Errorf("second run output = %q, want it to mention the cache hit", out)
+	}
+
+	run(testOpts{noCache: true}) // --no-cache must force a real run regardless.
+	if len(a.callTarget) != 2 {
+		t.Errorf("--no-cache run: RunTests targets = %v, want both a and b despite a valid cache", a.callTarget)
+	}
+}

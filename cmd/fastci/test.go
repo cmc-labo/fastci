@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/hpscript/fastci/internal/gitdiff"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/impact"
+	"github.com/hpscript/fastci/internal/testcache"
 )
 
 // candidateAnalyzers lists every built-in analyzer, tried in order against
@@ -43,6 +45,7 @@ func newTestCmd() *cobra.Command {
 		verbose             bool
 		fullRunThresholdPct float64
 		why                 string
+		noCache             bool
 	)
 
 	cmd := &cobra.Command{
@@ -75,6 +78,7 @@ e.g.:
 				verbose:             verbose,
 				fullRunThresholdPct: fullRunThresholdPct,
 				why:                 why,
+				noCache:             noCache,
 				extraArgs:           args,
 			})
 		},
@@ -88,6 +92,8 @@ e.g.:
 		"if this many percent (0-100) of tracked source files changed, run the full suite instead of narrowing - a safety net against a diff too broad for per-file attribution to be meaningful. A change transitively affecting many tests through the dependency graph (e.g. a shared core library) is already handled precisely without this flag; it exists for diffs so broad that narrowing itself is the risk. 0 (default) disables this check.")
 	cmd.Flags().StringVar(&why, "why", "",
 		"explain why the given file (or, for Go/Cargo, package import path/crate name) was or wasn't selected, showing the dependency chain back to the changed file responsible - or that no changed file reaches it at all. Diagnostic only: doesn't run any tests.")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false,
+		"always actually run every selected target, bypassing the local test-result cache (.fastci-cache/test-results.json) that would otherwise skip re-running a target whose exact current content - its own files plus everything it transitively depends on - already passed in a previous run")
 
 	return cmd
 }
@@ -99,6 +105,7 @@ type testOpts struct {
 	verbose             bool
 	fullRunThresholdPct float64
 	why                 string
+	noCache             bool
 	extraArgs           []string
 }
 
@@ -185,11 +192,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 			}
 			fmt.Printf("  - %s\n", r)
 		}
-		if opts.dryRun {
-			fmt.Println("fastci: dry-run, not executing tests")
-			return nil
-		}
-		return runAndRecord(cmd.Context(), repoRoot, a, cwd, result.Targets, opts.extraArgs)
+		return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, opts)
 	}
 
 	if len(result.Targets) == 0 {
@@ -229,12 +232,57 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		fmt.Printf("  %s %s\n", marker, relOrSelf(repoRoot, t))
 	}
 
+	return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, opts)
+}
+
+// runSelectedTargets runs targets - already narrowed by impact analysis, or
+// every test target during a full run - after first filtering out any the
+// local test-result cache (internal/testcache) already has a passing
+// result for, under their exact current content. This is a genuinely
+// different, more precise mechanism than the dependency-graph narrowing
+// above: that narrowing decides "which targets could this diff possibly
+// affect", while this cache asks "have we already seen this exact target
+// content pass, regardless of how it got selected" - so it can still find
+// something to skip even during a full run. --no-cache bypasses this
+// entirely.
+func runSelectedTargets(cmd *cobra.Command, repoRoot string, g *graph.Graph, a analyzer.Analyzer, cwd string, targets []string, opts testOpts) error {
+	if opts.noCache {
+		if opts.dryRun {
+			fmt.Println("fastci: dry-run, not executing tests")
+			return nil
+		}
+		return runAndRecord(cmd.Context(), repoRoot, a, cwd, targets, opts.extraArgs)
+	}
+
+	cache := testcache.Open(repoRoot)
+	hits, misses := cache.Filter(g, a.Name(), opts.extraArgs, targets)
+	if len(hits) > 0 {
+		names := make([]string, len(hits))
+		for i, h := range hits {
+			names[i] = relOrSelf(repoRoot, h)
+		}
+		fmt.Printf("fastci: %d/%d target(s) skipped (cache hit - unchanged content already passed): %s\n",
+			len(hits), len(targets), strings.Join(names, ", "))
+	}
+
 	if opts.dryRun {
 		fmt.Println("fastci: dry-run, not executing tests")
 		return nil
 	}
 
-	return runAndRecord(cmd.Context(), repoRoot, a, cwd, result.Targets, opts.extraArgs)
+	if len(misses) == 0 {
+		fmt.Println("fastci: nothing to run - every selected target was a cache hit")
+		return nil
+	}
+
+	if err := runAndRecord(cmd.Context(), repoRoot, a, cwd, misses, opts.extraArgs); err != nil {
+		return err
+	}
+	cache.RecordPass(g, a.Name(), opts.extraArgs, misses)
+	if err := cache.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "fastci: could not save test-result cache: %v\n", err)
+	}
+	return nil
 }
 
 // fullRunThresholdReason reports whether the fraction of changed files that
