@@ -10,7 +10,7 @@ No Bazel, no build-system migration. Drop it in front of your test runner
 in your existing GitHub Actions workflow (or run it locally) and it gets
 out of the way otherwise.
 
-![fastci selecting 3 of 43 Go test targets affected by a one-file change](docs/demo.gif)
+![fastci narrowing a one-file change to 3 of 43 Go test targets, explaining why one of them was selected with --why, and previewing a run with --dry-run](docs/demo.gif)
 
 This is an early, incrementally-developed project. Today it covers:
 
