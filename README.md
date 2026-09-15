@@ -282,6 +282,31 @@ don't run it on output you wouldn't want leaving your machine.
 (`ANTHROPIC_BASE_URL` is also honored, for a proxy or an API-compatible
 alternative endpoint.)
 
+### `fastci guard`
+
+The first piece of Phase 3's `fastci guard` (see [Roadmap](#roadmap)):
+supply-chain vulnerability scanning. It doesn't implement any vulnerability
+detection itself - it runs each ecosystem's own official, trusted scanner
+and reports what it finds:
+
+| Ecosystem | Scanner | Install |
+| --- | --- | --- |
+| Go | [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
+| JS/TS | `npm audit` / `pnpm audit` / `yarn audit` (picked by lockfile) | comes with Node.js |
+| Python | [`pip-audit`](https://pypi.org/project/pip-audit/) | `pip install pip-audit` |
+| Rust | [`cargo-audit`](https://github.com/rustsec/rustsec) | `cargo install cargo-audit` |
+
+```sh
+fastci guard
+```
+
+Unlike `fastci test`, which picks a single project type, `guard` detects
+and runs *every* applicable scanner independently - a monorepo with both a
+`go.mod` and a `package.json` gets both. A scanner whose underlying tool
+isn't installed is skipped with an install hint printed, rather than
+failing the whole command; `guard` exits non-zero only when a scanner that
+did run reports an actual vulnerability.
+
 ## GitHub Actions
 
 ```yaml
@@ -482,7 +507,11 @@ This tracks the phased plan in the project design doc:
   and fix suggestions. Implemented — see [Usage](#usage) and
   [`fastci analyze`](#fastci-analyze) below.
 - **Phase 3 (V2.0)** — `fastci local` (fast local CI reproduction) and
-  `fastci guard` (supply-chain / runtime security guardrails).
+  `fastci guard` (supply-chain / runtime security guardrails). `fastci
+  guard`'s first piece (supply-chain vulnerability scanning across Go,
+  JS/TS, Python, and Rust) is implemented — see
+  [`fastci guard`](#fastci-guard) above; runtime guardrails, and `fastci
+  local`, aren't started yet.
 
 Language coverage grows incrementally alongside this. Candidates being
 considered next: Vite `resolve.alias` resolution, Vitest/Jest
