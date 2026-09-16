@@ -307,6 +307,40 @@ isn't installed is skipped with an install hint printed, rather than
 failing the whole command; `guard` exits non-zero only when a scanner that
 did run reports an actual vulnerability.
 
+### `fastci local`
+
+Phase 3's other piece (see [Roadmap](#roadmap)): reproducing what CI would
+run, locally, without having to remember or hand-pick `--base`. `local`
+reads `.github/workflows/*.yml` for the base branch a pull request would be
+diffed against, then runs `fastci test` with that as `--base`:
+
+```sh
+fastci local
+```
+
+It looks for the base branch in this order:
+
+1. An explicit `on.pull_request.branches` in a workflow file.
+2. Failing that, the same workflow's `on.push.branches` - a bare
+   `pull_request:` trigger with no branches filter is common (GitHub
+   already scopes it to the PR's own base branch, so there's often nothing
+   to read there), and a repo's main integration branch is almost always
+   both what pushes deploy from and what pull requests target.
+3. Failing that, the repository's actual default branch
+   (`refs/remotes/origin/HEAD`).
+4. As a last resort, `main`.
+
+```
+$ fastci local
+fastci: reproducing CI locally against origin/main (no pull_request.branches filter found, inferred from on.push.branches in .github/workflows/ci.yml)
+fastci: 2 changed file(s):
+  ...
+```
+
+It accepts the same `--dry-run`, `--no-cache`, and `-- <flags>` passthrough
+as `fastci test` (see above); `--base` isn't accepted, since detecting it
+is the entire point.
+
 ## GitHub Actions
 
 ```yaml
@@ -510,8 +544,12 @@ This tracks the phased plan in the project design doc:
   `fastci guard` (supply-chain / runtime security guardrails). `fastci
   guard`'s first piece (supply-chain vulnerability scanning across Go,
   JS/TS, Python, and Rust) is implemented — see
-  [`fastci guard`](#fastci-guard) above; runtime guardrails, and `fastci
-  local`, aren't started yet.
+  [`fastci guard`](#fastci-guard) above. `fastci local` is implemented for
+  its core scope — auto-detecting CI's diff base branch from
+  `.github/workflows/*.yml` and running `fastci test` against it locally —
+  see [`fastci local`](#fastci-local) above; faithfully replaying a
+  workflow's other steps (e.g. its `uses:` actions) is out of scope for
+  this. `guard`'s runtime guardrails piece isn't started yet.
 
 Language coverage grows incrementally alongside this. Candidates being
 considered next: Vite `resolve.alias` resolution, Vitest/Jest
