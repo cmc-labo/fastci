@@ -11,10 +11,7 @@ import (
 )
 
 func newLocalCmd() *cobra.Command {
-	var (
-		noCache bool
-		dryRun  bool
-	)
+	var opts testOpts
 
 	cmd := &cobra.Command{
 		Use:   "local [-- test runner flags]",
@@ -31,18 +28,21 @@ CI would.
 Flags after "--" are forwarded to the underlying test runner unchanged, the
 same as "fastci test".`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLocal(cmd, args, noCache, dryRun)
+			opts.extraArgs = args
+			return runLocal(cmd, opts)
 		},
 	}
 
-	cmd.Flags().BoolVar(&noCache, "no-cache", false,
+	cmd.Flags().BoolVar(&opts.noCache, "no-cache", false,
 		"always actually run every selected target, bypassing the local test-result cache")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the selected test targets without running them")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "print the selected test targets without running them")
+	cmd.Flags().BoolVar(&opts.networkReport, "network-report", false,
+		"run the test/build command through a local logging proxy and report which hosts it contacted afterward - see \"fastci test --help\"")
 
 	return cmd
 }
 
-func runLocal(cmd *cobra.Command, extraArgs []string, noCache, dryRun bool) error {
+func runLocal(cmd *cobra.Command, opts testOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -58,14 +58,9 @@ func runLocal(cmd *cobra.Command, extraArgs []string, noCache, dryRun bool) erro
 		return fmt.Errorf("detecting CI's base branch: %w", err)
 	}
 
-	base := "origin/" + det.Branch
-	fmt.Printf("fastci: reproducing CI locally against %s (%s)\n", base, det.Reason)
+	opts.base = "origin/" + det.Branch
+	opts.verbose = true
+	fmt.Printf("fastci: reproducing CI locally against %s (%s)\n", opts.base, det.Reason)
 
-	return runTest(cmd, testOpts{
-		base:      base,
-		verbose:   true,
-		noCache:   noCache,
-		dryRun:    dryRun,
-		extraArgs: extraArgs,
-	})
+	return runTest(cmd, opts)
 }

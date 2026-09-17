@@ -46,6 +46,7 @@ func newTestCmd() *cobra.Command {
 		fullRunThresholdPct float64
 		why                 string
 		noCache             bool
+		networkReport       bool
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +80,7 @@ e.g.:
 				fullRunThresholdPct: fullRunThresholdPct,
 				why:                 why,
 				noCache:             noCache,
+				networkReport:       networkReport,
 				extraArgs:           args,
 			})
 		},
@@ -94,6 +96,8 @@ e.g.:
 		"explain why the given file (or, for Go/Cargo, package import path/crate name) was or wasn't selected, showing the dependency chain back to the changed file responsible - or that no changed file reaches it at all. Diagnostic only: doesn't run any tests.")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false,
 		"always actually run every selected target, bypassing the local test-result cache (.fastci-cache/test-results.json) that would otherwise skip re-running a target whose exact current content - its own files plus everything it transitively depends on - already passed in a previous run")
+	cmd.Flags().BoolVar(&networkReport, "network-report", false,
+		"run the test/build command through a local logging proxy (via HTTP_PROXY/HTTPS_PROXY) and report which hosts it contacted afterward - a lightweight supply-chain runtime guardrail (part of fastci guard). HTTPS traffic is tunneled through unmodified: only the CONNECT target host:port is ever seen, never the decrypted payload. Overrides any proxy already set in the environment for the duration of the run, then restores it.")
 
 	return cmd
 }
@@ -106,6 +110,7 @@ type testOpts struct {
 	fullRunThresholdPct float64
 	why                 string
 	noCache             bool
+	networkReport       bool
 	extraArgs           []string
 }
 
@@ -144,7 +149,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		if err != nil {
 			return err
 		}
-		return runAndRecord(cmd.Context(), repoRoot, a, cwd, allTargets, opts.extraArgs)
+		return runAndRecordWithNetworkReport(cmd.Context(), repoRoot, a, cwd, allTargets, opts)
 	}
 
 	changed, err := gitdiff.ChangedFiles(repoRoot, opts.base)
@@ -251,7 +256,7 @@ func runSelectedTargets(cmd *cobra.Command, repoRoot string, g *graph.Graph, a a
 			fmt.Println("fastci: dry-run, not executing tests")
 			return nil
 		}
-		return runAndRecord(cmd.Context(), repoRoot, a, cwd, targets, opts.extraArgs)
+		return runAndRecordWithNetworkReport(cmd.Context(), repoRoot, a, cwd, targets, opts)
 	}
 
 	cache := testcache.Open(repoRoot)
@@ -275,7 +280,7 @@ func runSelectedTargets(cmd *cobra.Command, repoRoot string, g *graph.Graph, a a
 		return nil
 	}
 
-	if err := runAndRecord(cmd.Context(), repoRoot, a, cwd, misses, opts.extraArgs); err != nil {
+	if err := runAndRecordWithNetworkReport(cmd.Context(), repoRoot, a, cwd, misses, opts); err != nil {
 		return err
 	}
 	cache.RecordPass(g, a.Name(), opts.extraArgs, misses)

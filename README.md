@@ -318,6 +318,33 @@ lifecycle scan, whose `node_modules` doesn't exist yet) is skipped with an
 install hint printed, rather than failing the whole command; `guard` exits
 non-zero only when a check that did run reports something.
 
+`guard`'s other, runtime piece is a `--network-report` flag on `fastci
+test` (and `fastci local`, below) rather than its own subcommand, since
+it has to wrap the actual test/build process running - something only
+those two already do:
+
+```sh
+fastci test --network-report
+```
+
+```
+$ fastci test --network-report
+ok  	example.com/netcheck	0.191s
+fastci: network report: 1 host(s) contacted:
+  example.com:80
+```
+
+It points the test/build run at a small local proxy (via
+`HTTP_PROXY`/`HTTPS_PROXY`, restored to whatever they were before once the
+run finishes) and reports every host it contacted - useful for noticing a
+dependency phoning home somewhere unexpected during a build or test run.
+HTTPS traffic is tunneled through the proxy unmodified: it only ever reads
+the plaintext `CONNECT host:port` line itself to learn the destination, and
+never holds a TLS certificate/key that would let it decrypt or inspect
+anything past that. It's purely informational - it doesn't block or fail
+the run based on what it sees, unlike the allowlist-enforcement approach
+some tools take, which this deliberately doesn't do.
+
 ### `fastci local`
 
 Phase 3's other piece (see [Roadmap](#roadmap)): reproducing what CI would
@@ -552,17 +579,17 @@ This tracks the phased plan in the project design doc:
   and fix suggestions. Implemented — see [Usage](#usage) and
   [`fastci analyze`](#fastci-analyze) below.
 - **Phase 3 (V2.0)** — `fastci local` (fast local CI reproduction) and
-  `fastci guard` (supply-chain / runtime security guardrails). `fastci
-  guard`'s supply-chain vulnerability scanning (govulncheck, npm/pnpm/yarn
-  audit, pip-audit, cargo-audit) plus a JS/TS install-time lifecycle-script
-  scan are implemented — see [`fastci guard`](#fastci-guard) above; other
-  runtime-guardrail ideas (e.g. monitoring for unexpected network egress
-  during a test/build run) aren't started. `fastci local` is implemented
+  `fastci guard` (supply-chain / runtime security guardrails). Implemented:
+  `fastci guard`'s supply-chain vulnerability scanning (govulncheck,
+  npm/pnpm/yarn audit, pip-audit, cargo-audit), a JS/TS install-time
+  lifecycle-script scan, and a `--network-report` runtime guardrail on
+  `fastci test`/`fastci local` that reports which hosts a run contacted —
+  see [`fastci guard`](#fastci-guard) above. `fastci local` is implemented
   for its core scope — auto-detecting CI's diff base branch from
   `.github/workflows/*.yml` and running `fastci test` against it locally —
   see [`fastci local`](#fastci-local) above; faithfully replaying a
   workflow's other steps (e.g. its `uses:` actions) is out of scope for
-  this.
+  this. This closes out every item originally planned for Phase 3.
 
 Language coverage grows incrementally alongside this. Candidates being
 considered next: Vite `resolve.alias` resolution, Vitest/Jest
