@@ -86,8 +86,8 @@ func TestJSAuditPicksPackageManagerByLockfile(t *testing.T) {
 func TestCheckersListedInFixedOrder(t *testing.T) {
 	names1 := checkerNames(guard.Checkers())
 	names2 := checkerNames(guard.Checkers())
-	if len(names1) != 4 {
-		t.Fatalf("Checkers() returned %d checkers, want 4", len(names1))
+	if len(names1) != 5 {
+		t.Fatalf("Checkers() returned %d checkers, want 5", len(names1))
 	}
 	for i := range names1 {
 		if names1[i] != names2[i] {

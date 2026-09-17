@@ -284,10 +284,10 @@ alternative endpoint.)
 
 ### `fastci guard`
 
-The first piece of Phase 3's `fastci guard` (see [Roadmap](#roadmap)):
-supply-chain vulnerability scanning. It doesn't implement any vulnerability
-detection itself - it runs each ecosystem's own official, trusted scanner
-and reports what it finds:
+Phase 3's `fastci guard` (see [Roadmap](#roadmap)): supply-chain security
+scanning. Most of its checks run each ecosystem's own official, trusted
+scanner and report what it finds, rather than implementing vulnerability
+detection itself:
 
 | Ecosystem | Scanner | Install |
 | --- | --- | --- |
@@ -296,16 +296,27 @@ and reports what it finds:
 | Python | [`pip-audit`](https://pypi.org/project/pip-audit/) | `pip install pip-audit` |
 | Rust | [`cargo-audit`](https://github.com/rustsec/rustsec) | `cargo install cargo-audit` |
 
+One check is fastci's own, since no equivalent official tool exists for it:
+for JS/TS projects with a `node_modules` present, it scans every installed
+dependency's `package.json` for a `preinstall`/`install`/`postinstall`
+script - the mechanism behind real supply-chain attacks like event-stream
+(2018) and ua-parser-js (2021), where malicious code ran automatically the
+moment a dependency was installed. A lifecycle script isn't inherently
+malicious (esbuild, puppeteer, and husky all legitimately use one), so this
+doesn't judge intent - it just surfaces which dependencies can run code at
+install time, so a human can look.
+
 ```sh
 fastci guard
 ```
 
 Unlike `fastci test`, which picks a single project type, `guard` detects
-and runs *every* applicable scanner independently - a monorepo with both a
-`go.mod` and a `package.json` gets both. A scanner whose underlying tool
-isn't installed is skipped with an install hint printed, rather than
-failing the whole command; `guard` exits non-zero only when a scanner that
-did run reports an actual vulnerability.
+and runs *every* applicable check independently - a monorepo with both a
+`go.mod` and a `package.json` gets govulncheck, js audit, and the lifecycle
+script scan. A check whose underlying tool isn't installed (or, for the
+lifecycle scan, whose `node_modules` doesn't exist yet) is skipped with an
+install hint printed, rather than failing the whole command; `guard` exits
+non-zero only when a check that did run reports something.
 
 ### `fastci local`
 
@@ -542,14 +553,16 @@ This tracks the phased plan in the project design doc:
   [`fastci analyze`](#fastci-analyze) below.
 - **Phase 3 (V2.0)** — `fastci local` (fast local CI reproduction) and
   `fastci guard` (supply-chain / runtime security guardrails). `fastci
-  guard`'s first piece (supply-chain vulnerability scanning across Go,
-  JS/TS, Python, and Rust) is implemented — see
-  [`fastci guard`](#fastci-guard) above. `fastci local` is implemented for
-  its core scope — auto-detecting CI's diff base branch from
+  guard`'s supply-chain vulnerability scanning (govulncheck, npm/pnpm/yarn
+  audit, pip-audit, cargo-audit) plus a JS/TS install-time lifecycle-script
+  scan are implemented — see [`fastci guard`](#fastci-guard) above; other
+  runtime-guardrail ideas (e.g. monitoring for unexpected network egress
+  during a test/build run) aren't started. `fastci local` is implemented
+  for its core scope — auto-detecting CI's diff base branch from
   `.github/workflows/*.yml` and running `fastci test` against it locally —
   see [`fastci local`](#fastci-local) above; faithfully replaying a
   workflow's other steps (e.g. its `uses:` actions) is out of scope for
-  this. `guard`'s runtime guardrails piece isn't started yet.
+  this.
 
 Language coverage grows incrementally alongside this. Candidates being
 considered next: Vite `resolve.alias` resolution, Vitest/Jest

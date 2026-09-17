@@ -1,11 +1,12 @@
-// Package guard is the start of fastci's Phase 3 "fastci guard" feature:
-// supply-chain vulnerability scanning. Rather than implementing vulnerability
-// detection itself, it orchestrates each ecosystem's own official, trusted
-// scanner (govulncheck, npm/pnpm/yarn audit, pip-audit, cargo-audit) - the
-// same "delegate to the real toolchain" approach the rest of fastci already
-// takes for go/packages, esbuild, and cargo metadata, rather than
-// reimplementing something a language's own tooling already does
-// authoritatively.
+// Package guard implements fastci's Phase 3 "fastci guard" feature:
+// supply-chain security scanning. Most Checkers orchestrate an ecosystem's
+// own official, trusted scanner (govulncheck, npm/pnpm/yarn audit,
+// pip-audit, cargo-audit) - the same "delegate to the real toolchain"
+// approach the rest of fastci already takes for go/packages, esbuild, and
+// cargo metadata, rather than reimplementing something a language's own
+// tooling already does authoritatively. LifecycleScripts is the one
+// exception, since no equivalent official tool exists for that specific
+// check - see its own doc comment.
 //
 // A Checker's Run doesn't try to parse its underlying tool's findings into
 // a structured shape: vulnerability report formats vary and change across
@@ -82,6 +83,7 @@ func Checkers() []Checker {
 	return []Checker{
 		GoVulnCheck{},
 		JSAudit{},
+		LifecycleScripts{},
 		PipAudit{},
 		CargoAudit{},
 	}
