@@ -31,7 +31,7 @@ func (PipAudit) BinaryAvailable(dir string) (bool, string) {
 	if _, err := exec.LookPath("pip-audit"); err == nil {
 		return true, ""
 	}
-	return false, "pip install pip-audit  (or: pipx install pip-audit)"
+	return false, "pip-audit not found on PATH (install: pip install pip-audit, or: pipx install pip-audit)"
 }
 
 func (PipAudit) Run(ctx context.Context, dir string) (Result, error) {

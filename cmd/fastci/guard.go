@@ -63,7 +63,7 @@ func runGuard(cmd *cobra.Command) error {
 			fmt.Println()
 		}
 		if ok, hint := c.BinaryAvailable(cwd); !ok {
-			fmt.Printf("fastci: %s: skipped - not installed. Install with: %s\n", c.Name(), hint)
+			fmt.Printf("fastci: %s: skipped - %s\n", c.Name(), hint)
 			anySkips = true
 			continue
 		}
@@ -89,7 +89,7 @@ func runGuard(cmd *cobra.Command) error {
 	case anyIssues:
 		return fmt.Errorf("one or more scanners reported vulnerabilities")
 	case anySkips:
-		fmt.Println("fastci: no vulnerabilities found by the scanners that ran, but at least one applicable scanner was skipped (not installed) - see above")
+		fmt.Println("fastci: no vulnerabilities found by the scanners that ran, but at least one applicable scanner was skipped - see above")
 	default:
 		fmt.Println("fastci: no vulnerabilities found")
 	}

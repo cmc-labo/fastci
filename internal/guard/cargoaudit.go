@@ -26,7 +26,7 @@ func (CargoAudit) BinaryAvailable(dir string) (bool, string) {
 	if _, err := exec.LookPath("cargo-audit"); err == nil {
 		return true, ""
 	}
-	return false, "cargo install cargo-audit"
+	return false, "cargo-audit not found on PATH (install: cargo install cargo-audit)"
 }
 
 func (CargoAudit) Run(ctx context.Context, dir string) (Result, error) {

@@ -60,15 +60,14 @@ func TestJSAuditPicksPackageManagerByLockfile(t *testing.T) {
 	}{
 		{"pnpm-lock.yaml", "pnpm"},
 		{"yarn.lock", "yarn"},
-		{"", "npm"}, // no lockfile at all -> npm default
+		{"package-lock.json", "npm"},
+		{"npm-shrinkwrap.json", "npm"},
 	}
 	for _, c := range cases {
 		t.Run(c.wantBin, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, filepath.Join(dir, "package.json"), "{}")
-			if c.lockfile != "" {
-				writeFile(t, filepath.Join(dir, c.lockfile), "")
-			}
+			writeFile(t, filepath.Join(dir, c.lockfile), "")
 			// BinaryAvailable's install hint mentions the chosen binary
 			// name, giving us a black-box way to check the selection
 			// without exporting jsAuditCommand.
@@ -77,6 +76,26 @@ func TestJSAuditPicksPackageManagerByLockfile(t *testing.T) {
 				t.Errorf("install hint = %q, want it to mention %q", hint, c.wantBin)
 			}
 		})
+	}
+}
+
+// TestJSAuditSkipsWithoutAnyLockfile guards a real bug: "npm audit" (the
+// default when no pnpm/yarn lockfile is present) requires a lockfile of
+// its own and fails outright without one - "npm error code ENOLOCK ...
+// This command requires an existing lockfile" - exiting 1 exactly like it
+// would for "vulnerabilities found". Without this BinaryAvailable check, a
+// package.json with no committed lockfile at all would make guard falsely
+// report a vulnerability that npm audit never actually looked for.
+func TestJSAuditSkipsWithoutAnyLockfile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), "{}")
+
+	ok, hint := guard.JSAudit{}.BinaryAvailable(dir)
+	if ok {
+		t.Fatal("BinaryAvailable = true with no lockfile at all, want false")
+	}
+	if !strings.Contains(hint, "lockfile") {
+		t.Errorf("hint = %q, want it to explain that a lockfile is needed", hint)
 	}
 }
 

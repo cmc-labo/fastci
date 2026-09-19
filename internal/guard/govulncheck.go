@@ -24,7 +24,7 @@ func (GoVulnCheck) BinaryAvailable(dir string) (bool, string) {
 	if _, err := exec.LookPath("govulncheck"); err == nil {
 		return true, ""
 	}
-	return false, "go install golang.org/x/vuln/cmd/govulncheck@latest"
+	return false, "govulncheck not found on PATH (install: go install golang.org/x/vuln/cmd/govulncheck@latest)"
 }
 
 func (GoVulnCheck) Run(ctx context.Context, dir string) (Result, error) {
