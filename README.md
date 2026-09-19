@@ -210,9 +210,9 @@ fastci: why is "src/isolated.test.ts" selected?
   NOT selected: no changed file's effect reaches this target through the dependency graph.
 ```
 
-### Local test-result cache
+### Test-result cache (local and distributed)
 
-Every selected target is checked against a local, content-hash-keyed cache
+Every selected target is checked against a content-hash-keyed cache
 (`.fastci-cache/test-results.json`, git-ignored automatically) before it's
 actually run: if the target's own files and everything it transitively
 depends on are byte-for-byte identical to a previous run that passed (under
@@ -241,8 +241,29 @@ reason it's always treated as possibly affected there: the graph can't
 prove it has captured that target's full dependency set. `--no-cache`
 bypasses this entirely and always actually runs every selected target.
 
-This is a local-machine cache only — nothing is shared across machines or
-CI runners (yet; see [Roadmap](#roadmap)).
+By default this is a local-machine cache only. Setting
+`FASTCI_REMOTE_CACHE_URL` additionally shares it across machines and CI
+runners — the "distributed" half of the [Roadmap](#roadmap)'s Phase 1
+cache:
+
+```sh
+export FASTCI_REMOTE_CACHE_URL=https://cache.example.com/fastci
+export FASTCI_REMOTE_CACHE_TOKEN=...   # optional, sent as a bearer token
+fastci test
+```
+
+The protocol is a minimal HTTP GET/PUT key-value store — the same shape
+Bazel's remote cache or sccache use: `GET <url>/<key>` returning 200 means
+a hit, 404 (or anything else) means a miss; `PUT <url>/<key>` records a
+pass. fastci has no opinion on what's actually behind the URL: a small
+self-hosted server, a static-file host that accepts PUT, an S3-compatible
+bucket via presigned URLs a CI job generates ahead of time, etc. Every
+request has a 5-second timeout and is best-effort — a network error, a
+timeout, or the remote being entirely unreachable degrades to "just don't
+use the remote cache" (one warning printed to stderr per run, not a failed
+build), never blocking or failing the actual test run. A remote hit is
+folded into the local cache file too, so a later run on the same machine
+doesn't pay for another round trip to see it again.
 
 ### `fastci analyze`
 
@@ -571,10 +592,11 @@ error rather than a bare `git` failure.
 This tracks the phased plan in the project design doc:
 
 - **Phase 1 (V1.0)** — Impact-Driven Test Runner (this) + a distributed
-  build/dependency cache. The test runner is implemented; the cache is
-  implemented for a single local machine only so far (see
-  [Local test-result cache](#local-test-result-cache) above) — sharing it
-  across machines/CI runners (the "distributed" part) is still outstanding.
+  build/dependency cache. Both are implemented: the test runner, and the
+  cache's local-machine caching plus its distributed, opt-in
+  `FASTCI_REMOTE_CACHE_URL`-backed sharing across machines/CI runners —
+  see [Test-result cache (local and distributed)](#test-result-cache-local-and-distributed)
+  above.
 - **Phase 2 (V1.5)** — `fastci analyze`: AI-assisted failure log analysis
   and fix suggestions. Implemented — see [Usage](#usage) and
   [`fastci analyze`](#fastci-analyze) below.

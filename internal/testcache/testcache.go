@@ -1,8 +1,8 @@
-// Package testcache is a local, content-hash-keyed cache of test results:
-// this machine's first step toward the "distributed build/dependency
-// cache" from the project's Phase 1 roadmap (see the README) - only
-// local-machine caching is implemented so far, not anything shared across
-// machines.
+// Package testcache is a content-hash-keyed cache of test results,
+// implementing the "distributed build/dependency cache" from the
+// project's Phase 1 roadmap (see the README): local-machine caching
+// always applies, and sharing across machines/CI runners additionally
+// applies whenever FASTCI_REMOTE_CACHE_URL is configured (see remote.go).
 //
 // Re-running `fastci test` with exactly the same effective inputs for a
 // target - its own files and everything it transitively depends on,
@@ -35,17 +35,22 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/hpscript/fastci/internal/graph"
 )
 
 const cacheFileName = "test-results.json"
 
-// Cache is a local, on-disk record of {cache key -> last known result}.
+// Cache is a record of {cache key -> last known result}: always backed by
+// a local on-disk file, and additionally backed by a shared remote (see
+// remote.go) whenever one is configured.
 type Cache struct {
-	path    string
-	entries map[string]entry
-	dirty   bool
+	path     string
+	repoRoot string
+	entries  map[string]entry
+	dirty    bool
+	remote   *remoteCache
 }
 
 type entry struct {
@@ -53,11 +58,15 @@ type entry struct {
 }
 
 // Open loads the persisted cache from repoRoot's .fastci-cache directory,
-// starting empty (not an error) if none exists yet or it's corrupt.
+// starting empty (not an error) if none exists yet or it's corrupt, and
+// picks up a remote cache from the environment if one is configured (see
+// remoteFromEnv).
 func Open(repoRoot string) *Cache {
 	c := &Cache{
-		path:    filepath.Join(repoRoot, ".fastci-cache", cacheFileName),
-		entries: map[string]entry{},
+		path:     filepath.Join(repoRoot, ".fastci-cache", cacheFileName),
+		repoRoot: repoRoot,
+		entries:  map[string]entry{},
+		remote:   remoteFromEnv(),
 	}
 	if data, err := os.ReadFile(c.path); err == nil {
 		_ = json.Unmarshal(data, &c.entries) // corrupt cache -> just start empty
@@ -68,33 +77,91 @@ func Open(repoRoot string) *Cache {
 // Filter splits targets into hits (a cached passing result exists for the
 // exact current content of the target and everything it transitively
 // depends on, under this exact analyzer/extraArgs invocation) and misses
-// (everything else, which must actually be run).
+// (everything else, which must actually be run). A target whose result is
+// only known via the remote cache - e.g. a different machine or CI runner
+// recorded it - counts as a hit too, and is folded into the local cache so
+// a later run doesn't need another round trip to see it again.
 func (c *Cache) Filter(g *graph.Graph, analyzerName string, extraArgs []string, targets []string) (hits, misses []string) {
-	for _, t := range targets {
-		key, ok := cacheKey(g, analyzerName, extraArgs, t)
-		if ok {
-			if e, found := c.entries[key]; found && e.Passed {
-				hits = append(hits, t)
-				continue
+	type lookup struct {
+		target string
+		key    string
+		hasKey bool
+		hit    bool
+	}
+	lookups := make([]lookup, len(targets))
+
+	var (
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, remoteConcurrency)
+	)
+	for i, t := range targets {
+		key, ok := cacheKey(g, c.repoRoot, analyzerName, extraArgs, t)
+		lookups[i] = lookup{target: t, key: key, hasKey: ok}
+		if !ok {
+			continue
+		}
+		if e, found := c.entries[key]; found && e.Passed {
+			lookups[i].hit = true
+			continue
+		}
+		if c.remote == nil {
+			continue
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int, key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			lookups[i].hit = c.remote.get(key)
+		}(i, key)
+	}
+	wg.Wait()
+
+	for _, l := range lookups {
+		if !l.hit {
+			misses = append(misses, l.target)
+			continue
+		}
+		hits = append(hits, l.target)
+		if l.hasKey {
+			if _, found := c.entries[l.key]; !found {
+				c.entries[l.key] = entry{Passed: true}
+				c.dirty = true
 			}
 		}
-		misses = append(misses, t)
 	}
 	return hits, misses
 }
 
 // RecordPass marks every one of targets as passing under its current
-// content hash, for a future run to reuse. Call this only after targets
-// have actually been run and the run as a whole succeeded.
+// content hash, for a future run (on this machine, and - if a remote
+// cache is configured - any other machine or CI runner) to reuse. Call
+// this only after targets have actually been run and the run as a whole
+// succeeded.
 func (c *Cache) RecordPass(g *graph.Graph, analyzerName string, extraArgs []string, targets []string) {
+	var (
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, remoteConcurrency)
+	)
 	for _, t := range targets {
-		key, ok := cacheKey(g, analyzerName, extraArgs, t)
+		key, ok := cacheKey(g, c.repoRoot, analyzerName, extraArgs, t)
 		if !ok {
 			continue // e.g. a dynamic-import target - never cached, see package doc.
 		}
 		c.entries[key] = entry{Passed: true}
 		c.dirty = true
+		if c.remote == nil {
+			continue
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			c.remote.put(key)
+		}(key)
 	}
+	wg.Wait()
 }
 
 // Save persists the cache to disk (only if anything changed via
@@ -136,7 +203,17 @@ func (c *Cache) Save() error {
 // hashes the same way regardless of map iteration order. ok is false if
 // target (or anything in its transitive closure) has HasDynamicImport set,
 // or if any of their files can't be read.
-func cacheKey(g *graph.Graph, analyzerName string, extraArgs []string, target string) (string, bool) {
+//
+// Each file is hashed under its path *relative to repoRoot*, not its
+// absolute path: a node's Files are absolute (each analyzer builds them
+// from the working directory it was given), and two different checkouts
+// of the identical repository content - a developer's laptop and a CI
+// runner, or even the same machine at two different clone paths - almost
+// never share that absolute prefix. Hashing the absolute path would mean
+// the remote cache (see remote.go) could never actually hit across
+// machines, defeating the entire point of it; hashing the relative path
+// makes the key a property of the repository's content alone.
+func cacheKey(g *graph.Graph, repoRoot, analyzerName string, extraArgs []string, target string) (string, bool) {
 	closure, ok := transitiveClosure(g, target)
 	if !ok {
 		return "", false
@@ -163,7 +240,11 @@ func cacheKey(g *graph.Graph, analyzerName string, extraArgs []string, target st
 			if err != nil {
 				return "", false // can't hash reliably - never cache this target.
 			}
-			io.WriteString(h, f)
+			relF := f
+			if rel, err := filepath.Rel(repoRoot, f); err == nil {
+				relF = rel
+			}
+			io.WriteString(h, relF)
 			h.Write([]byte{0})
 			h.Write(data)
 		}
