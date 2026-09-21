@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -59,8 +60,20 @@ type Checker interface {
 // an infra problem for the caller to report distinctly from "vulnerabilities
 // were found".
 func runChecker(ctx context.Context, name, dir string, argv []string) (Result, error) {
+	return runCheckerEnv(ctx, name, dir, argv, nil)
+}
+
+// runCheckerEnv is runChecker with extraEnv appended to the child's
+// environment (on top of the current process's own, matching
+// exec.Cmd's normal default when Env is left nil) - for a checker that
+// needs to steer its underlying tool beyond argv, e.g. pip-audit's
+// PIPAPI_PYTHON_LOCATION (see pipaudit.go).
+func runCheckerEnv(ctx context.Context, name, dir string, argv []string, extraEnv []string) (Result, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
