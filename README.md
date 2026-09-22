@@ -43,8 +43,12 @@ See [Roadmap](#roadmap) for what's next.
      them. A Jest `moduleNameMapper` config (from `jest.config.json` or
      `package.json`'s `"jest"` field) is additionally applied through a
      custom esbuild resolver plugin, so aliases defined only there (not in
-     `tsconfig.json`) are tracked too; Vitest has no equivalent yet — see
-     [Current limitations](#current-limitations).
+     `tsconfig.json`) are tracked too. Vitest's own `resolve.alias`
+     (`vite.config.*`/`vitest.config.*`) is resolved the same way Vite
+     itself resolves it — by actually bundling and executing the config
+     file under Node — since, unlike `moduleNameMapper`, it's arbitrary
+     JS/TS code rather than a JSON-shaped value; see
+     [Current limitations](#current-limitations) for what that needs.
    - pytest: every `.py` file is parsed with Python's own `ast` module, and
      import targets (including relative imports like `from ..pkg import x`)
      are normalized with the stdlib's `importlib.util.resolve_name`, then
@@ -469,13 +473,23 @@ error rather than a bare `git` failure.
   handling, and `node_modules`/workspace-monorepo limitation with Jest (see
   below) — everything in the Jest section below other than the
   `moduleNameMapper`/`jest.config.*` points applies to Vitest too.
-- Vite's own `resolve.alias` config (in `vite.config.*`/`vitest.config.*`)
-  is **not** resolved — unlike Jest's `moduleNameMapper`, which is a
-  JSON-shaped value that can be read as data, a Vite alias list lives
-  inside arbitrary JS/TS config code with no static format to parse. An
-  import resolved only through such an alias is invisible to the graph;
-  `tsconfig.json` `paths`/`baseUrl` aliases (which esbuild resolves
-  directly) are unaffected by this and work as expected.
+- Vite's own `resolve.alias` config (in `vite.config.*`/`vitest.config.*`,
+  vitest.config.* taking priority when both exist, matching Vitest's own
+  precedence) **is** resolved — unlike Jest's `moduleNameMapper`, which is
+  a JSON-shaped value that can be read as data, a Vite alias list lives
+  inside arbitrary JS/TS config code, so fastci bundles the config file
+  with esbuild and actually executes it under Node, the same way
+  Vite/Vitest themselves load it, then feeds the resulting alias map into
+  esbuild's resolver. This needs `node` on `PATH` and the config's own
+  imports (typically just `vite`, for `defineConfig`) already installed in
+  `node_modules`; without either, or if the config fails to execute for any
+  other reason, this degrades silently back to the old behavior — an
+  alias-only-reachable import is invisible to the graph — rather than
+  failing the whole analysis. `resolve.alias` entries keyed by a `RegExp`
+  (Vite allows this; esbuild's own alias resolver only supports
+  string/prefix matching) are skipped the same way. `tsconfig.json`
+  `paths`/`baseUrl` aliases (which esbuild resolves directly, with no
+  execution needed) are unaffected by any of this and always work.
 - Test-file discovery uses Vitest's default `include` pattern
   (`**/*.{test,spec}.?(c|m)[jt]sx?`). A custom `test.include`/`test.exclude`
   in `vitest.config.*` isn't honored yet — such a project still works, but
@@ -613,9 +627,10 @@ This tracks the phased plan in the project design doc:
   workflow's other steps (e.g. its `uses:` actions) is out of scope for
   this. This closes out every item originally planned for Phase 3.
 
-Language coverage grows incrementally alongside this. Candidates being
-considered next: Vite `resolve.alias` resolution, Vitest/Jest
-monorepo/workspace cross-package resolution, and function-level (not just
+Language coverage grows incrementally alongside this. Vite `resolve.alias`
+resolution is implemented — see [Current limitations](#current-limitations)
+above. Candidates still being considered: Vitest/Jest monorepo/workspace
+cross-package resolution, and function-level (not just
 package/crate/file-level) impact analysis.
 
 ## License

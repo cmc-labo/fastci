@@ -7,13 +7,20 @@
 // and import()/require() calls with a static string or resolvable
 // template-literal argument are all handled the same way jestanalyzer does
 // (see internal/analyzer/dynimport for the dynamic-import safety net shared
-// by both). Unlike jestanalyzer, it does not resolve Vite's own
-// `resolve.alias` config (in vite.config.*/vitest.config.*): unlike Jest's
-// moduleNameMapper, which is JSON-shaped and can be read as data, a Vite
-// alias list lives inside arbitrary JS/TS config code, so there's no static
-// config format to parse the way loadModuleNameMapper does for Jest. An
-// import resolved only through such an alias is invisible to the graph -
-// see the README for this limitation.
+// by both).
+//
+// Unlike jestanalyzer's moduleNameMapper support, Vite's own `resolve.alias`
+// config (in vite.config.*/vitest.config.*) can't be read as static data -
+// it lives inside arbitrary JS/TS config code, not a JSON-shaped value. So
+// rather than approximating it, resolveViteAliases (see viteconfig.go)
+// bundles the config file with esbuild and actually executes it under
+// Node, the same way Vite/Vitest themselves load it, then feeds the
+// resulting alias map into esbuild's own `Alias` resolver option. This is
+// best-effort: it requires Node on PATH and the config's own imports
+// (typically just "vite", for defineConfig) already installed, and simply
+// degrades to leaving alias-only-reachable imports invisible to the graph
+// - exactly as if this didn't exist - if either isn't available, rather
+// than failing the whole analysis over an optional enhancement.
 package vitestanalyzer
 
 import (
@@ -184,6 +191,7 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		LogLevel:      api.LogLevelSilent,
 		AbsWorkingDir: dir,
 		Outdir:        ".fastci-metafile",
+		Alias:         resolveViteAliases(dir),
 	}
 	if len(rewrites) > 0 {
 		opts.Plugins = append(opts.Plugins, dynimport.NeutralizerPlugin(rewrites))
