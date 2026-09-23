@@ -131,6 +131,39 @@ func TestBuildResolvesModuleNameMapperAlias(t *testing.T) {
 	}
 }
 
+// TestBuildResolvesWorkspaceCrossPackageImport uses
+// testdata/samplejestmonorepo, an npm/yarn workspace ("workspaces":
+// ["packages/*"]) with two member packages: @myorg/utils and @myorg/app.
+// @myorg/app's consumer.ts imports @myorg/utils both bare (its main entry,
+// index.ts) and via a subpath (@myorg/utils/helpers) - neither is a
+// relative or tsconfig-aliased import, so this edge can only exist if
+// jsworkspace actually detected the workspace and resolved both forms
+// through esbuild's real resolver.
+func TestBuildResolvesWorkspaceCrossPackageImport(t *testing.T) {
+	dir := sampleDir(t, "samplejestmonorepo")
+	a := jestanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	utilsIndex := filepath.Join(dir, "packages", "utils", "index.ts")
+	utilsHelpers := filepath.Join(dir, "packages", "utils", "helpers.ts")
+	consumer := filepath.Join(dir, "packages", "app", "src", "consumer.ts")
+
+	for _, f := range []string{utilsIndex, utilsHelpers, consumer} {
+		if _, ok := g.Nodes[f]; !ok {
+			t.Fatalf("missing node for %s", f)
+		}
+	}
+	if !g.Nodes[consumer].Imports[utilsIndex] {
+		t.Error(`consumer.ts should import packages/utils/index.ts via the bare "@myorg/utils" workspace import`)
+	}
+	if !g.Nodes[consumer].Imports[utilsHelpers] {
+		t.Error(`consumer.ts should import packages/utils/helpers.ts via the "@myorg/utils/helpers" workspace subpath import`)
+	}
+}
+
 func TestBuildFlagsOpaqueDynamicImport(t *testing.T) {
 	dir := sampleDir(t, "samplejestdynamic")
 	a := jestanalyzer.New()

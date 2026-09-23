@@ -11,10 +11,12 @@
 // goanalyzer uses via go/packages. A Jest `moduleNameMapper` config (read
 // from jest.config.json or package.json's "jest" field) is additionally
 // applied via an esbuild resolver plugin, so aliases defined only there
-// (not in tsconfig) are tracked too. See the package doc for
-// modulenamemapper.go and the README for what's still out of reach: import
-// specifiers built from a runtime-computed (non-literal) expression can't
-// be resolved by any static tool, esbuild included.
+// (not in tsconfig) are tracked too. A cross-package import within an
+// npm/pnpm/yarn workspace monorepo (e.g. `import {x} from '@myorg/utils'`
+// from a sibling package) is resolved the same way, via
+// internal/analyzer/jsworkspace. See the README for what's still out of
+// reach: import specifiers built from a runtime-computed (non-literal)
+// expression can't be resolved by any static tool, esbuild included.
 package jestanalyzer
 
 import (
@@ -30,6 +32,7 @@ import (
 	"github.com/evanw/esbuild/pkg/api"
 
 	"github.com/hpscript/fastci/internal/analyzer/dynimport"
+	"github.com/hpscript/fastci/internal/analyzer/jsworkspace"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -144,10 +147,10 @@ type metafile struct {
 // Build discovers every tracked source file under dir and asks esbuild to
 // resolve each one's imports - relative paths, tsconfig `paths`/`baseUrl`
 // aliases, and extension/index resolution are all handled by esbuild's
-// real resolver. Bare specifiers that resolve into node_modules (including
-// other packages in an npm/pnpm/yarn workspace) are treated as external
-// and are not tracked as graph edges; see the package doc and README for
-// the current monorepo limitation this implies.
+// real resolver. A bare specifier naming another package in the same
+// npm/pnpm/yarn workspace (see jsworkspace) is resolved to that sibling
+// package's real files; any other bare specifier (a genuine third-party
+// dependency) is treated as external and not tracked as a graph edge.
 func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	files, err := discoverSourceFiles(dir)
 	if err != nil {
@@ -180,6 +183,8 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		return nil, err
 	}
 
+	workspaceMembers := jsworkspace.Members(dir)
+
 	opts := api.BuildOptions{
 		EntryPoints:   entryPoints,
 		Bundle:        true,
@@ -193,6 +198,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	}
 	if len(mapperEntries) > 0 {
 		opts.Plugins = append(opts.Plugins, moduleNameMapperPlugin(dir, mapperEntries))
+	}
+	if len(workspaceMembers) > 0 {
+		opts.Plugins = append(opts.Plugins, jsworkspace.Plugin(workspaceMembers))
 	}
 	if len(rewrites) > 0 {
 		opts.Plugins = append(opts.Plugins, dynimport.NeutralizerPlugin(rewrites))

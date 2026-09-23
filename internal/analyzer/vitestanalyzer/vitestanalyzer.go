@@ -36,6 +36,7 @@ import (
 	"github.com/evanw/esbuild/pkg/api"
 
 	"github.com/hpscript/fastci/internal/analyzer/dynimport"
+	"github.com/hpscript/fastci/internal/analyzer/jsworkspace"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -181,6 +182,8 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		return nil, err
 	}
 
+	workspaceMembers := jsworkspace.Members(dir)
+
 	opts := api.BuildOptions{
 		EntryPoints:   entryPoints,
 		Bundle:        true,
@@ -192,6 +195,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 		AbsWorkingDir: dir,
 		Outdir:        ".fastci-metafile",
 		Alias:         resolveViteAliases(dir),
+	}
+	if len(workspaceMembers) > 0 {
+		opts.Plugins = append(opts.Plugins, jsworkspace.Plugin(workspaceMembers))
 	}
 	if len(rewrites) > 0 {
 		opts.Plugins = append(opts.Plugins, dynimport.NeutralizerPlugin(rewrites))

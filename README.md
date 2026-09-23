@@ -48,7 +48,11 @@ See [Roadmap](#roadmap) for what's next.
      itself resolves it — by actually bundling and executing the config
      file under Node — since, unlike `moduleNameMapper`, it's arbitrary
      JS/TS code rather than a JSON-shaped value; see
-     [Current limitations](#current-limitations) for what that needs.
+     [Current limitations](#current-limitations) for what that needs. A
+     cross-package import within an npm/pnpm/yarn workspace monorepo
+     (e.g. `import {x} from '@myorg/utils'` from a sibling package) is
+     resolved for both Vitest and Jest the same way — see
+     [Current limitations](#current-limitations) below.
    - pytest: every `.py` file is parsed with Python's own `ast` module, and
      import targets (including relative imports like `from ..pkg import x`)
      are normalized with the stdlib's `importlib.util.resolve_name`, then
@@ -469,10 +473,11 @@ error rather than a bare `git` failure.
   (e.g. `//go:embed`) aren't tracked yet.
 
 **Vitest**
-- Shares its esbuild-based import resolution, dynamic `import()`/`require()`
-  handling, and `node_modules`/workspace-monorepo limitation with Jest (see
-  below) — everything in the Jest section below other than the
-  `moduleNameMapper`/`jest.config.*` points applies to Vitest too.
+- Shares its esbuild-based import resolution and dynamic
+  `import()`/`require()` handling with Jest (see below) — everything in
+  the Jest section below other than the `moduleNameMapper`/`jest.config.*`
+  points applies to Vitest too, including npm/pnpm/yarn workspace
+  cross-package resolution.
 - Vite's own `resolve.alias` config (in `vite.config.*`/`vitest.config.*`,
   vitest.config.* taking priority when both exist, matching Vitest's own
   precedence) **is** resolved — unlike Jest's `moduleNameMapper`, which is
@@ -500,12 +505,23 @@ error rather than a bare `git` failure.
 
 **Jest**
 - Bare specifiers that resolve into `node_modules` are treated as external
-  and are not walked further. In an npm/pnpm/yarn **workspace monorepo**,
-  a cross-package import like `import {x} from '@myorg/utils'` is
-  currently **not** tracked as a graph edge (relative imports and
-  `tsconfig.json` `paths`/`baseUrl` aliases within a single package *are*
-  fully resolved). This mirrors where Go started before workspace support
-  was added, and is the natural next increment for Jest.
+  and are not walked further, **except** a cross-package import within an
+  npm/pnpm/yarn **workspace monorepo** — e.g. `import {x} from
+  '@myorg/utils'` from a sibling package — which *is* resolved to that
+  package's real files (both its bare main entry and any subpath, e.g.
+  `@myorg/utils/helpers`). This is fully static: the workspace root's
+  `package.json` `"workspaces"` field (npm/yarn - either the array or
+  `{"packages": [...]}` form) or `pnpm-workspace.yaml`'s `packages:` list
+  (pnpm) is read to map each member package's name to its directory, then
+  esbuild's own resolver is pointed at that directory - `npm
+  install`/`pnpm install`/`yarn install` having been run is not required.
+  fastci must be run from the workspace root for this (the same place that
+  manifest lives) — running it from within a single member package treats
+  that package in isolation, with cross-package imports staying external
+  as before. An exclusion glob (a pattern starting with `!` in
+  `pnpm-workspace.yaml`) is not honored; a member matched by a broader
+  inclusion pattern despite an unread exclusion is only ever a false
+  *inclusion*, never a missed one.
 - Test-file discovery uses Jest's default conventions
   (`*.test.{js,jsx,ts,tsx,mjs,cjs}`, `*.spec.{...}`, or anything under
   `__tests__/`). Custom `testMatch`/`testRegex` overrides in a
@@ -628,9 +644,9 @@ This tracks the phased plan in the project design doc:
   this. This closes out every item originally planned for Phase 3.
 
 Language coverage grows incrementally alongside this. Vite `resolve.alias`
-resolution is implemented — see [Current limitations](#current-limitations)
-above. Candidates still being considered: Vitest/Jest monorepo/workspace
-cross-package resolution, and function-level (not just
+resolution and Vitest/Jest monorepo/workspace cross-package resolution are
+both implemented — see [Current limitations](#current-limitations) above.
+The remaining candidate being considered: function-level (not just
 package/crate/file-level) impact analysis.
 
 ## License
