@@ -242,3 +242,57 @@ func TestRunSelectedTargetsSkipsCacheHitsOnSecondRun(t *testing.T) {
 		t.Errorf("--no-cache run: RunTests targets = %v, want both a and b despite a valid cache", a.callTarget)
 	}
 }
+
+func TestHasRunFlag(t *testing.T) {
+	cases := []struct {
+		args []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{"-v"}, false},
+		{[]string{"-run", "TestFoo"}, true},
+		{[]string{"--run", "TestFoo"}, true},
+		{[]string{"-run=TestFoo"}, true},
+		{[]string{"--run=TestFoo"}, true},
+		{[]string{"-v", "-run", "TestFoo"}, true},
+		{[]string{"-runthing"}, false}, // must not match a flag that merely starts with "-run"
+	}
+	for _, c := range cases {
+		if got := hasRunFlag(c.args); got != c.want {
+			t.Errorf("hasRunFlag(%v) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}
+
+// TestApplyFunctionLevelFilterGuards covers applyFunctionLevelFilter's
+// short-circuit conditions - the ones that must skip the real (expensive,
+// git/SSA-dependent) analysis entirely - without needing a real Go module
+// or git repository, since none of these should reach goanalyzer.RefineRunFilter
+// at all.
+func TestApplyFunctionLevelFilterGuards(t *testing.T) {
+	opts := testOpts{extraArgs: []string{"-v"}}
+
+	t.Run("non-Go analyzer leaves opts untouched", func(t *testing.T) {
+		got := applyFunctionLevelFilter(&fakeRunTestsAnalyzer{name: "jest"}, "/repo", "", "/repo", []string{"/repo/f.js"}, opts)
+		if len(got.extraArgs) != 1 || got.extraArgs[0] != "-v" {
+			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, opts.extraArgs)
+		}
+	})
+
+	t.Run("dry run leaves opts untouched", func(t *testing.T) {
+		dryOpts := opts
+		dryOpts.dryRun = true
+		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, dryOpts)
+		if len(got.extraArgs) != 1 || got.extraArgs[0] != "-v" {
+			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, opts.extraArgs)
+		}
+	})
+
+	t.Run("existing user -run leaves opts untouched", func(t *testing.T) {
+		runOpts := testOpts{extraArgs: []string{"-run", "TestUserChoice"}}
+		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, runOpts)
+		if len(got.extraArgs) != 2 || got.extraArgs[0] != "-run" || got.extraArgs[1] != "TestUserChoice" {
+			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, runOpts.extraArgs)
+		}
+	})
+}

@@ -237,7 +237,48 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		fmt.Printf("  %s %s\n", marker, relOrSelf(repoRoot, t))
 	}
 
-	return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, opts)
+	return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, applyFunctionLevelFilter(a, repoRoot, opts.base, cwd, changed, opts))
+}
+
+// applyFunctionLevelFilter is the CLI-layer half of Go function-level
+// impact analysis (see goanalyzer.RefineRunFilter for the actual
+// analysis): when a is a *goanalyzer.Analyzer, opts doesn't already
+// carry a user-supplied -run/--run flag (never second-guess an explicit
+// choice), and it isn't a dry run (skip the real SSA/call-graph work when
+// nothing's actually going to execute), it asks RefineRunFilter whether
+// this diff's changes can be safely narrowed to a specific `-run` pattern
+// on top of the package-level target selection already computed - and, if
+// so, returns opts with that pattern appended to extraArgs. Otherwise it
+// returns opts completely unchanged, which is the ordinary case: this
+// applies only to the narrowed (non-FullRun) selection path, since a
+// package-level FullRun already means the diff couldn't be safely
+// attributed to specific packages, so there's nothing to further narrow
+// with more confidence than that.
+func applyFunctionLevelFilter(a analyzer.Analyzer, repoRoot, base, cwd string, changed []string, opts testOpts) testOpts {
+	if opts.dryRun {
+		return opts
+	}
+	if _, ok := a.(*goanalyzer.Analyzer); !ok {
+		return opts
+	}
+	if hasRunFlag(opts.extraArgs) {
+		return opts
+	}
+	pattern, ok := goanalyzer.RefineRunFilter(repoRoot, base, cwd, changed)
+	if !ok {
+		return opts
+	}
+	opts.extraArgs = append(append([]string(nil), opts.extraArgs...), "-run", pattern)
+	return opts
+}
+
+func hasRunFlag(extraArgs []string) bool {
+	for _, a := range extraArgs {
+		if a == "-run" || a == "--run" || strings.HasPrefix(a, "-run=") || strings.HasPrefix(a, "--run=") {
+			return true
+		}
+	}
+	return false
 }
 
 // runSelectedTargets runs targets - already narrowed by impact analysis, or

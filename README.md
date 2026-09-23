@@ -408,6 +408,65 @@ It accepts the same `--dry-run`, `--no-cache`, and `-- <flags>` passthrough
 as `fastci test` (see above); `--base` isn't accepted, since detecting it
 is the entire point.
 
+### Function-level impact analysis (Go)
+
+Everything above narrows *which packages* to test. For Go, `fastci test`
+additionally tries to narrow *which tests within a selected package* —
+down from every test in it to just the ones that actually, transitively
+call whatever function changed:
+
+```
+$ fastci test -- -v
+fastci: selected 1/1 test target(s) (go, 0% skipped)
+  * example.com/calc
+=== RUN   TestComputeViaAdd
+--- PASS: TestComputeViaAdd (0.00s)
+PASS
+ok  	example.com/calc	0.002s
+```
+
+(`TestMultiply`, also in that package, was correctly left out — nothing it
+exercises calls the function that actually changed.)
+
+This builds a real call graph for the whole module using
+[RTA](https://pkg.go.dev/golang.org/x/tools/go/callgraph/rta) (Rapid Type
+Analysis, from every test function in the module as roots — the same
+`golang.org/x/tools` family `go/packages` is already part of), then walks
+it backward from the changed function to find every transitive caller
+among those roots, and passes the result to `go test` as a `-run` pattern.
+RTA, not the simpler CHA algorithm, is essential here: CHA resolves any
+non-static call by signature alone against *every* function in the whole
+program (stdlib included), which for a plain function with a common
+signature like `func(int, int) int` reaches close to everything and makes
+narrowing useless. RTA instead only considers a function a candidate
+callee of a dynamic call site once it's actually been discovered as a
+value somewhere in the code reachable from the roots, which an ordinary
+function only ever called by name — the common case — never is.
+
+This is deliberately conservative and always all-or-nothing for the whole
+diff: it only ever narrows when *every* changed file is a non-test `.go`
+file whose diff hunks each fall entirely inside one existing function's
+body — no added/removed functions, no signature changes, no package-level
+declaration changes, no test file changes, nothing unparseable. Any of
+those makes it fall straight back to running every test in the normally-
+selected packages, same as if this didn't exist; it also never narrows a
+package down to *zero* tests — if the call graph finds no reachable test
+at all for a changed function, that's treated the same as unsafe, not
+resolved to "nothing to run". An explicit `--run`/`-run` you pass yourself
+(e.g. `fastci test -- -run TestFoo`) is never overridden.
+
+Like RTA itself, this can't see calls made via reflection, cgo, assembly,
+or `//go:linkname` — a real, if narrow, gap in soundness for code relying
+on those, accepted here for a large reduction in what has to run for the
+overwhelmingly common case of an ordinary function-body edit. Interface
+dispatch is handled soundly but not with full precision: RTA resolves it
+per call site, not per calling context, so if two different tests each
+construct a different concrete type and pass it through the *same*
+interface-typed call site, changing one implementation's method can select
+both tests rather than just the one that actually uses it — a safe
+over-approximation (an extra test runs; the right one is never missed),
+not a bug.
+
 ## GitHub Actions
 
 ```yaml
@@ -466,8 +525,11 @@ error rather than a bare `git` failure.
   subdirectories). Cross-module import edges within a workspace are
   resolved correctly, including test-only edges. `go.work`/`go.work.sum`
   changes trigger a full run, same as `go.mod`/`go.sum`.
-- Impact analysis is package-level, not function-level, for now (see
-  [Roadmap](#roadmap)).
+- Package-level impact analysis (which packages to test) always applies.
+  On top of that, [function-level narrowing](#function-level-impact-analysis-go)
+  (which tests *within* a selected package) applies only when the diff is
+  cleanly attributable to specific function bodies; see that section for
+  exactly when it does and doesn't kick in.
 - Non-Go changes (docs, workflow YAML, etc.) are treated as not affecting
   any test package. Go files that reference non-Go inputs at build time
   (e.g. `//go:embed`) aren't tracked yet.
@@ -644,10 +706,16 @@ This tracks the phased plan in the project design doc:
   this. This closes out every item originally planned for Phase 3.
 
 Language coverage grows incrementally alongside this. Vite `resolve.alias`
-resolution and Vitest/Jest monorepo/workspace cross-package resolution are
-both implemented — see [Current limitations](#current-limitations) above.
-The remaining candidate being considered: function-level (not just
-package/crate/file-level) impact analysis.
+resolution, Vitest/Jest monorepo/workspace cross-package resolution, and
+function-level impact analysis (Go only for now — see
+[Function-level impact analysis (Go)](#function-level-impact-analysis-go))
+are all implemented — see [Current limitations](#current-limitations)
+above. Extending function-level analysis to Jest/Vitest/pytest is not
+planned in the near term: unlike Go, a sound static call graph for
+dynamically-typed JS/TS or Python would have a real, material false-
+negative risk (missing a test that should run) from ordinary, common
+patterns — callbacks, monkey-patching, dynamic dispatch — that Go's static
+typing makes tractable to rule out.
 
 ## License
 
