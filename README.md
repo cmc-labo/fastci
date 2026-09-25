@@ -437,35 +437,56 @@ among those roots, and passes the result to `go test` as a `-run` pattern.
 RTA, not the simpler CHA algorithm, is essential here: CHA resolves any
 non-static call by signature alone against *every* function in the whole
 program (stdlib included), which for a plain function with a common
-signature like `func(int, int) int` reaches close to everything and makes
-narrowing useless. RTA instead only considers a function a candidate
-callee of a dynamic call site once it's actually been discovered as a
-value somewhere in the code reachable from the roots, which an ordinary
-function only ever called by name — the common case — never is.
+signature like `func(int, int) int` reaches close to essentially
+everything and makes narrowing useless.
+
+That backward walk only ever follows a **static** call edge — an ordinary
+call to a named function or a method on a concrete (non-interface) type.
+It deliberately never crosses an interface method call or a plain
+function/closure value call, even though RTA resolves those too: RTA
+resolves a dynamic call site's possible callees per *call site*, not per
+calling instance, so if two unrelated callers each pass their own closure
+(or their own concrete type, for an interface call) through the very same
+higher-order function or interface method — an everyday pattern,
+`testing.T.Run` itself being the most common example, since every subtest
+passes its own closure through it — RTA can't tell the two apart. In a
+codebase using `t.Run` at all (nearly all real Go test suites do), that
+turns into "every test is reachable from every other test" within a
+handful of hops, discovered the hard way by running this against fastci's
+own test suite during development. Restricting to static edges gives up on
+narrowing through an interface or closure boundary (that part of the diff
+falls back to running everything, the same as any other case this can't
+safely narrow) in exchange for the results that *do* come back being
+genuinely trustworthy rather than an unbounded, often near-total
+over-approximation.
+
+One direct consequence: if a diff's selected packages include one whose
+only real path to the changed function crosses such a boundary, this
+doesn't narrow *that* package down to an empty, wrong test set — it
+recognizes the gap and falls back to running every test in every selected
+package instead, exactly as if narrowing weren't attempted at all. So a
+codebase whose packages mostly talk to each other through interfaces (a
+perfectly normal, often desirable design — fastci's own analyzer
+abstraction is one) will see this narrow less often across package
+boundaries, but never incorrectly.
 
 This is deliberately conservative and always all-or-nothing for the whole
 diff: it only ever narrows when *every* changed file is a non-test `.go`
 file whose diff hunks each fall entirely inside one existing function's
 body — no added/removed functions, no signature changes, no package-level
-declaration changes, no test file changes, nothing unparseable. Any of
-those makes it fall straight back to running every test in the normally-
-selected packages, same as if this didn't exist; it also never narrows a
-package down to *zero* tests — if the call graph finds no reachable test
-at all for a changed function, that's treated the same as unsafe, not
-resolved to "nothing to run". An explicit `--run`/`-run` you pass yourself
-(e.g. `fastci test -- -run TestFoo`) is never overridden.
+declaration changes, no test file changes, nothing unparseable — **and**
+every one of the diff's already-selected target packages has at least one
+test reachable through a static-only call chain. Failing either makes it
+fall straight back to running every test in the normally-selected
+packages, same as if this didn't exist; it never narrows a package down to
+*zero* tests. An explicit `--run`/`-run` you pass yourself (e.g. `fastci
+test -- -run TestFoo`) is never overridden.
 
 Like RTA itself, this can't see calls made via reflection, cgo, assembly,
 or `//go:linkname` — a real, if narrow, gap in soundness for code relying
-on those, accepted here for a large reduction in what has to run for the
-overwhelmingly common case of an ordinary function-body edit. Interface
-dispatch is handled soundly but not with full precision: RTA resolves it
-per call site, not per calling context, so if two different tests each
-construct a different concrete type and pass it through the *same*
-interface-typed call site, changing one implementation's method can select
-both tests rather than just the one that actually uses it — a safe
-over-approximation (an extra test runs; the right one is never missed),
-not a bug.
+on those, accepted here for a real reduction in what has to run for the
+overwhelmingly common case of an ordinary function-body edit reached by an
+ordinary, direct call chain.
 
 ## GitHub Actions
 

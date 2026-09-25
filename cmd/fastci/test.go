@@ -237,7 +237,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		fmt.Printf("  %s %s\n", marker, relOrSelf(repoRoot, t))
 	}
 
-	return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, applyFunctionLevelFilter(a, repoRoot, opts.base, cwd, changed, opts))
+	return runSelectedTargets(cmd, repoRoot, g, a, cwd, result.Targets, applyFunctionLevelFilter(a, repoRoot, opts.base, cwd, changed, result.Targets, opts))
 }
 
 // applyFunctionLevelFilter is the CLI-layer half of Go function-level
@@ -254,7 +254,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 // package-level FullRun already means the diff couldn't be safely
 // attributed to specific packages, so there's nothing to further narrow
 // with more confidence than that.
-func applyFunctionLevelFilter(a analyzer.Analyzer, repoRoot, base, cwd string, changed []string, opts testOpts) testOpts {
+func applyFunctionLevelFilter(a analyzer.Analyzer, repoRoot, base, cwd string, changed, targets []string, opts testOpts) testOpts {
 	if opts.dryRun {
 		return opts
 	}
@@ -264,7 +264,7 @@ func applyFunctionLevelFilter(a analyzer.Analyzer, repoRoot, base, cwd string, c
 	if hasRunFlag(opts.extraArgs) {
 		return opts
 	}
-	pattern, ok := goanalyzer.RefineRunFilter(repoRoot, base, cwd, changed)
+	pattern, ok := goanalyzer.RefineRunFilter(repoRoot, base, cwd, changed, targets)
 	if !ok {
 		return opts
 	}

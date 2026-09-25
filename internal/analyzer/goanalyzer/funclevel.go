@@ -47,7 +47,26 @@ import (
 // call graph finds no reachable test at all for a changed function,
 // that's treated the same as an unsafe diff - narrowing is skipped
 // entirely, not resolved to "nothing to run".
-func RefineRunFilter(repoRoot, base, dir string, changedFiles []string) (pattern string, ok bool) {
+func RefineRunFilter(repoRoot, base, dir string, changedFiles []string, targets []string) (pattern string, ok bool) {
+	// golang.org/x/tools/go/ssa and go/callgraph/rta are real, heavy
+	// static-analysis machinery exercised here against arbitrary
+	// real-world Go code they weren't necessarily hardened against (unlike
+	// go/packages/go list, which every other analyzer already leans on
+	// safely) - a panic somewhere in there must never take down the
+	// actual `fastci test` invocation over what's supposed to be a purely
+	// optional narrowing. Recovering here and falling back to "don't
+	// narrow" mirrors every other best-effort failure path in this
+	// function; it's the one failure mode that can't be handled by an
+	// ordinary error/ok return.
+	defer func() {
+		if recover() != nil {
+			pattern, ok = "", false
+		}
+	}()
+	return refineRunFilter(repoRoot, base, dir, changedFiles, targets)
+}
+
+func refineRunFilter(repoRoot, base, dir string, changedFiles []string, targets []string) (pattern string, ok bool) {
 	goFiles, ok := onlyProductionGoFiles(changedFiles)
 	if !ok {
 		return "", false
@@ -121,13 +140,38 @@ func RefineRunFilter(repoRoot, base, dir string, changedFiles []string) (pattern
 		return "", false
 	}
 
-	testNames := reachableTestNames(fset, result.CallGraph, changed)
-	if len(testNames) == 0 {
+	namesByPackage := reachableTestNames(fset, result.CallGraph, changed)
+	if len(namesByPackage) == 0 {
 		return "", false
 	}
 
-	sort.Strings(testNames)
-	return "^(" + strings.Join(testNames, "|") + ")$", true
+	// Every already-selected target must itself have at least one
+	// reachable test, or this can't safely apply at all: the single -run
+	// pattern this returns gets applied uniformly to every target in one
+	// `go test` invocation (see the caller in cmd/fastci), so if even one
+	// target's real path to the changed function crosses an interface or
+	// closure boundary the walk above didn't trust (see
+	// reachableTestNames), that target would come up with *zero* matching
+	// tests - silently skipping a package impact analysis already
+	// determined needs testing, exactly the "narrow to nothing" outcome
+	// this package exists to never produce. Falling back for the whole
+	// diff here, rather than only for that one target, keeps the contract
+	// simple: either every target gets a trustworthy narrowed run, or none
+	// of them do.
+	var allNames []string
+	for _, target := range targets {
+		names := namesByPackage[target]
+		if len(names) == 0 {
+			return "", false
+		}
+		allNames = append(allNames, names...)
+	}
+	if len(allNames) == 0 {
+		return "", false
+	}
+
+	sort.Strings(allNames)
+	return "^(" + strings.Join(allNames, "|") + ")$", true
 }
 
 // allTestFunctions returns every Go test function (see isTestFunc) in the
@@ -247,10 +291,43 @@ func matchingFunctions(prog *ssa.Program, changedDecls []*ast.FuncDecl) []*ssa.F
 }
 
 // reachableTestNames walks the call graph backward from roots (breadth
-// first, cycle-safe) and returns the deduplicated names of every Go test
-// function - see isTestFunc - reached along the way, at any distance, in
-// any package.
-func reachableTestNames(fset *token.FileSet, cg *callgraph.Graph, roots []*ssa.Function) []string {
+// first, cycle-safe) and returns every Go test function - see isTestFunc -
+// reached along the way, at any distance, grouped by the import path of
+// the package it's declared in (so a caller can verify a specific target
+// package actually has a match, not just that *some* package somewhere
+// does).
+//
+// Two restrictions on the walk, both load-bearing for correctness, not
+// just tuning:
+//
+//   - Only static edges are followed - see isStaticEdge. A dynamic edge
+//     (through an interface method or a plain function/closure value) in
+//     RTA's call graph is resolved per *call site*, not per calling
+//     instance: if two different, unrelated callers each pass their own
+//     closure through the very same higher-order function (an ordinary,
+//     common pattern - a "run this closure and capture its output" test
+//     helper, or testing.T.Run itself, which every subtest passes its own
+//     closure through), RTA cannot tell the two apart, and the reverse
+//     walk would cross from one caller into the other as if they called
+//     each other directly. In a codebase using either pattern at all
+//     (nearly all real Go test suites do, especially via t.Run), that
+//     reduces to "every test is reachable from every other test" within a
+//     handful of hops, defeating narrowing entirely. Following only
+//     static edges gives up on precision through indirection (a change
+//     reached only via an interface or closure boundary won't narrow -
+//     the whole diff falls back to running everything, same as any other
+//     "can't safely narrow" case) in exchange for the results that do
+//     come back being trustworthy rather than an unbounded, often-total
+//     over-approximation.
+//   - Traversal stops at a node that is itself a test function - it does
+//     not go on to explore that function's own incoming edges. A test
+//     function is never called by another function in real, static code,
+//     only by the testing package's own machinery, so there's nothing
+//     useful above it to explore anyway; skipping it up front avoids ever
+//     having to reason about whether that machinery's own dispatch (which
+//     is dynamic, and would be excluded by the rule above regardless) is
+//     safe to follow.
+func reachableTestNames(fset *token.FileSet, cg *callgraph.Graph, roots []*ssa.Function) map[string][]string {
 	visited := map[*callgraph.Node]bool{}
 	var queue []*callgraph.Node
 	for _, r := range roots {
@@ -260,28 +337,51 @@ func reachableTestNames(fset *token.FileSet, cg *callgraph.Graph, roots []*ssa.F
 		}
 	}
 
-	names := map[string]bool{}
+	byPackage := map[string]map[string]bool{}
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
 		for _, edge := range n.In {
+			if !isStaticEdge(edge) {
+				continue // see the doc comment above.
+			}
 			caller := edge.Caller
 			if visited[caller] {
 				continue
 			}
 			visited[caller] = true
-			queue = append(queue, caller)
 			if fn := caller.Func; fn != nil && isTestFunc(fset, fn) {
-				names[fn.Name()] = true
+				pkgPath := fn.Package().Pkg.Path()
+				if byPackage[pkgPath] == nil {
+					byPackage[pkgPath] = map[string]bool{}
+				}
+				byPackage[pkgPath][fn.Name()] = true
+				continue // stop here - a test function is never itself called by anything but the testing package's own machinery.
 			}
+			queue = append(queue, caller)
 		}
 	}
 
-	out := make([]string, 0, len(names))
-	for n := range names {
-		out = append(out, n)
+	out := make(map[string][]string, len(byPackage))
+	for pkgPath, names := range byPackage {
+		list := make([]string, 0, len(names))
+		for n := range names {
+			list = append(list, n)
+		}
+		out[pkgPath] = list
 	}
 	return out
+}
+
+// isStaticEdge reports whether edge's call site has a single, statically
+// known callee - true for an ordinary call to a named top-level function
+// or a method on a concrete (non-interface) type, false for a call
+// through an interface method or a function/closure value, which RTA can
+// only resolve to a *set* of possible callees rather than the one that
+// was actually meant. See the reachableTestNames doc comment for why only
+// the former is safe to treat as a real caller relationship here.
+func isStaticEdge(edge *callgraph.Edge) bool {
+	return edge.Site != nil && edge.Site.Common().StaticCallee() != nil
 }
 
 // isTestFunc reports whether fn is a function `go test` would actually

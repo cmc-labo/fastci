@@ -273,7 +273,7 @@ func TestApplyFunctionLevelFilterGuards(t *testing.T) {
 	opts := testOpts{extraArgs: []string{"-v"}}
 
 	t.Run("non-Go analyzer leaves opts untouched", func(t *testing.T) {
-		got := applyFunctionLevelFilter(&fakeRunTestsAnalyzer{name: "jest"}, "/repo", "", "/repo", []string{"/repo/f.js"}, opts)
+		got := applyFunctionLevelFilter(&fakeRunTestsAnalyzer{name: "jest"}, "/repo", "", "/repo", []string{"/repo/f.js"}, nil, opts)
 		if len(got.extraArgs) != 1 || got.extraArgs[0] != "-v" {
 			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, opts.extraArgs)
 		}
@@ -282,7 +282,7 @@ func TestApplyFunctionLevelFilterGuards(t *testing.T) {
 	t.Run("dry run leaves opts untouched", func(t *testing.T) {
 		dryOpts := opts
 		dryOpts.dryRun = true
-		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, dryOpts)
+		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, nil, dryOpts)
 		if len(got.extraArgs) != 1 || got.extraArgs[0] != "-v" {
 			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, opts.extraArgs)
 		}
@@ -290,7 +290,7 @@ func TestApplyFunctionLevelFilterGuards(t *testing.T) {
 
 	t.Run("existing user -run leaves opts untouched", func(t *testing.T) {
 		runOpts := testOpts{extraArgs: []string{"-run", "TestUserChoice"}}
-		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, runOpts)
+		got := applyFunctionLevelFilter(goanalyzer.New(), "/repo", "", "/repo", []string{"/repo/f.go"}, nil, runOpts)
 		if len(got.extraArgs) != 2 || got.extraArgs[0] != "-run" || got.extraArgs[1] != "TestUserChoice" {
 			t.Errorf("extraArgs = %v, want unchanged %v", got.extraArgs, runOpts.extraArgs)
 		}

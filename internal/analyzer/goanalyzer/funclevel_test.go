@@ -109,7 +109,7 @@ func ComputeViaAdd(a, b int) int {
 }
 `)
 
-	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")})
+	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc"})
 	if !ok {
 		t.Fatal("RefineRunFilter: ok = false, want true")
 	}
@@ -137,7 +137,7 @@ func ComputeViaAdd(a, b int) int {
 }
 `)
 
-	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")})
+	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc"})
 	if !ok {
 		t.Fatal("RefineRunFilter: ok = false, want true")
 	}
@@ -167,7 +167,7 @@ func ComputeViaAdd(a, b int) int {
 }
 `)
 
-	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")})
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc"})
 	if ok {
 		t.Error("RefineRunFilter: ok = true for a signature change, want false (unsafe to narrow)")
 	}
@@ -183,7 +183,7 @@ func Subtract(a, b int) int {
 }
 `)
 
-	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")})
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc"})
 	if ok {
 		t.Error("RefineRunFilter: ok = true for a newly added function, want false (unsafe to narrow)")
 	}
@@ -197,7 +197,7 @@ func TestRefineRunFilterFallsBackOnTestFileChange(t *testing.T) {
 func TestNew(t *testing.T) {}
 `)
 
-	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc_test.go")})
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc_test.go")}, []string{"calc"})
 	if ok {
 		t.Error("RefineRunFilter: ok = true for a _test.go change, want false")
 	}
@@ -221,7 +221,7 @@ func Untested(a, b int) int {
 }
 `)
 
-	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")})
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc"})
 	if ok {
 		t.Error("RefineRunFilter: ok = true for a function no test reaches, want false")
 	}
@@ -268,22 +268,20 @@ func TestRunOpWithSub(t *testing.T) {
 `
 
 // TestRefineRunFilterFollowsInterfaceDispatch exercises interface
-// dispatch, which RTA (unlike CHA) resolves precisely *per call site*: it
-// tracks which concrete types actually flow into an interface value
-// anywhere in the reachable program, so op.Do(a, b) inside RunOp is only
-// ever considered to reach AddOp.Do or SubOp.Do - never some unrelated
-// type's Do method elsewhere in the module (which is exactly the kind of
-// explosion CHA suffers from - see the RefineRunFilter doc comment).
-//
-// What RTA *can't* do is distinguish which of RunOp's several call sites
-// (here, the two present in TestRunOpWithAdd and TestRunOpWithSub) any
-// given caller reached it through - that's a context-sensitivity property
-// no call-graph algorithm this lightweight provides. So both tests are
-// expected here: RunOp's single `op.Do(a, b)` call site is reachable from
-// both, and both AddOp and SubOp are known "runtime types" flowing into
-// it, so walking backward from AddOp.Do correctly (if imprecisely)
-// reaches both - a sound over-approximation (an extra test runs; the
-// right one is never missed), not a bug.
+// dispatch, which reachableTestNames deliberately never traverses (see its
+// doc comment): RTA resolves a dynamic call site's possible callees per
+// *call site*, not per calling instance, so two unrelated callers sharing
+// one indirection point - here, RunOp's single `op.Do(a, b)` call site,
+// reached from both TestRunOpWithAdd (passing AddOp) and TestRunOpWithSub
+// (passing SubOp) - can't be told apart, and in a real codebase that
+// quickly cascades into "every test reaches every other test" (this is
+// exactly what real dogfooding against fastci's own test suite surfaced,
+// via testing.T.Run and ordinary closure-taking helpers - the same
+// mechanism, just far more of it). So this diff is expected to fall back
+// entirely rather than resolve to "both tests, over-approximated": a
+// change reachable only through an interface (or closure) boundary isn't
+// narrowed at all, the same as any other diff RefineRunFilter can't
+// safely narrow.
 func TestRefineRunFilterFollowsInterfaceDispatch(t *testing.T) {
 	dir := initGoRepo(t)
 	writeFuncLevelFile(t, dir, "go.mod", "module calc\n\ngo 1.21\n")
@@ -314,12 +312,9 @@ func RunOp(op Op, a, b int) int {
 }
 `)
 
-	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "op.go")})
-	if !ok {
-		t.Fatal("RefineRunFilter: ok = false, want true")
-	}
-	if pattern != "^(TestRunOpWithAdd|TestRunOpWithSub)$" {
-		t.Errorf("pattern = %q, want %q - see the test's doc comment for why both are expected", pattern, "^(TestRunOpWithAdd|TestRunOpWithSub)$")
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "op.go")}, []string{"calc"})
+	if ok {
+		t.Error("RefineRunFilter: ok = true, want false - see the test's doc comment for why interface dispatch must fall back")
 	}
 }
 
@@ -363,11 +358,75 @@ func Double(x int) int {
 }
 `)
 
-	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "leaf", "leaf.go")})
+	pattern, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "leaf", "leaf.go")}, []string{"calc/consumer"})
 	if !ok {
 		t.Fatal("RefineRunFilter: ok = false, want true")
 	}
 	if pattern != "^(TestUseDouble)$" {
 		t.Errorf("pattern = %q, want %q", pattern, "^(TestUseDouble)$")
+	}
+}
+
+// TestRefineRunFilterFallsBackWhenAnyTargetHasNoReachableTest reproduces a
+// real bug found during manual dogfooding: an already-selected target
+// package whose *only* real path to the changed function crosses an
+// indirect (interface, or here, plain function-value) call - which
+// reachableTestNames correctly refuses to trust, see its doc comment -
+// must never be silently left with zero matching tests once a single
+// combined -run pattern gets applied to every target together. Here,
+// package "wrapper" imports "calc" and genuinely, correctly gets selected
+// by ordinary package-level impact analysis, but only calls calc.Add by
+// passing it as a first-class function value through another function
+// that invokes it indirectly - a path function-level narrowing can't
+// verify. Even though "calc" itself has a perfectly good static-only
+// reachable test (TestComputeViaAdd), applying that pattern alone to
+// "wrapper" too would silently run zero of its tests. The whole diff must
+// fall back instead.
+func TestRefineRunFilterFallsBackWhenAnyTargetHasNoReachableTest(t *testing.T) {
+	dir := setupCalcModule(t)
+	writeFuncLevelFile(t, dir, "wrapper/wrapper.go", `package wrapper
+
+import "calc"
+
+type opFunc func(int, int) int
+
+func RunViaFuncValue(op opFunc, a, b int) int {
+	return op(a, b)
+}
+
+func UseAdd(a, b int) int {
+	return RunViaFuncValue(calc.Add, a, b)
+}
+`)
+	writeFuncLevelFile(t, dir, "wrapper/wrapper_test.go", `package wrapper
+
+import "testing"
+
+func TestUseAdd(t *testing.T) {
+	if UseAdd(2, 3) != 5 {
+		t.Fatal("bad")
+	}
+}
+`)
+	commitFuncLevel(t, dir, "add wrapper package")
+
+	writeFuncLevelFile(t, dir, "calc.go", `package calc
+
+func Add(a, b int) int {
+	return a + b + 0 // changed
+}
+
+func Multiply(a, b int) int {
+	return a * b
+}
+
+func ComputeViaAdd(a, b int) int {
+	return Add(a, b) + 1
+}
+`)
+
+	_, ok := goanalyzer.RefineRunFilter(dir, "", dir, []string{filepath.Join(dir, "calc.go")}, []string{"calc", "wrapper"})
+	if ok {
+		t.Error("RefineRunFilter: ok = true, want false - \"wrapper\" has no statically-reachable test even though \"calc\" does")
 	}
 }
