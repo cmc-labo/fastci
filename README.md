@@ -8,7 +8,9 @@ that changed — instead of your whole test suite.
 
 No Bazel, no build-system migration. Drop it in front of your test runner
 in your existing GitHub Actions workflow (or run it locally) and it gets
-out of the way otherwise.
+out of the way otherwise. See [Benchmarks](docs/benchmarks/README.md) for
+real, reproducible measurements — including where it helps, where it
+doesn't, and the scripts to check both on your own hardware.
 
 ![fastci narrowing a one-file change to 3 of 43 Go test targets, explaining why one of them was selected with --why, and previewing a run with --dry-run](docs/demo.gif)
 
