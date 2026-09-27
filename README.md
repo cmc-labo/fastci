@@ -329,15 +329,25 @@ detection itself:
 | Python | [`pip-audit`](https://pypi.org/project/pip-audit/) | `pip install pip-audit` |
 | Rust | [`cargo-audit`](https://github.com/rustsec/rustsec) | `cargo install cargo-audit` |
 
-One check is fastci's own, since no equivalent official tool exists for it:
-for JS/TS projects with a `node_modules` present, it scans every installed
-dependency's `package.json` for a `preinstall`/`install`/`postinstall`
-script - the mechanism behind real supply-chain attacks like event-stream
-(2018) and ua-parser-js (2021), where malicious code ran automatically the
-moment a dependency was installed. A lifecycle script isn't inherently
-malicious (esbuild, puppeteer, and husky all legitimately use one), so this
-doesn't judge intent - it just surfaces which dependencies can run code at
-install time, so a human can look.
+Two checks are fastci's own, since no equivalent official tool exists for
+either:
+
+- For JS/TS projects with a `node_modules` present, it scans every
+  installed dependency's `package.json` for a `preinstall`/`install`/
+  `postinstall` script - the mechanism behind real supply-chain attacks
+  like event-stream (2018) and ua-parser-js (2021), where malicious code
+  ran automatically the moment a dependency was installed. A lifecycle
+  script isn't inherently malicious (esbuild, puppeteer, and husky all
+  legitimately use one), so this doesn't judge intent - it just surfaces
+  which dependencies can run code at install time, so a human can look.
+- For Rust projects, it runs `cargo metadata` and flags every dependency
+  (direct or transitive) that defines a custom build script - the same
+  class of risk as a JS lifecycle script, but at *build* time instead of
+  install time: a `build.rs` (or whatever Cargo.toml's own `build` field
+  names it - detected via `cargo metadata`'s own structured output, not a
+  filename guess) runs arbitrary Rust code before the crate's own code is
+  even compiled. Same non-judgmental framing as the lifecycle-script scan:
+  linking a C library or emitting `cfg` flags are common, legitimate uses.
 
 ```sh
 fastci guard
@@ -350,6 +360,21 @@ script scan. A check whose underlying tool isn't installed (or, for the
 lifecycle scan, whose `node_modules` doesn't exist yet) is skipped with an
 install hint printed, rather than failing the whole command; `guard` exits
 non-zero only when a check that did run reports something.
+
+Each scanner's own exit code is interpreted according to *that tool's*
+actual convention, not a generic "any non-zero exit means a finding"
+assumption - govulncheck reserves a specific exit code for a real finding
+and uses others (most commonly triggered by a failure to fetch its
+vulnerability database) for the tool itself failing; npm/pnpm/yarn audit,
+pip-audit, and cargo-audit all reuse the same exit code for both a real
+finding and a failure to reach their advisory data, distinguishable only
+by a message in their own output. Getting this wrong would misreport an
+ordinary network hiccup as a real vulnerability - a genuine false
+positive we found and fixed by deliberately forcing each scanner to fail
+this way in practice, not just by reading their docs. A check that fails
+this way is reported as "could not complete", the same as a missing
+binary, rather than as a finding, and - like a missing binary - never
+stops `guard` from still running every other applicable check.
 
 `guard`'s other, runtime piece is a `--network-report` flag on `fastci
 test` (and `fastci local`, below) rather than its own subcommand, since
@@ -721,7 +746,8 @@ This tracks the phased plan in the project design doc:
   `fastci guard` (supply-chain / runtime security guardrails). Implemented:
   `fastci guard`'s supply-chain vulnerability scanning (govulncheck,
   npm/pnpm/yarn audit, pip-audit, cargo-audit), a JS/TS install-time
-  lifecycle-script scan, and a `--network-report` runtime guardrail on
+  lifecycle-script scan, a Rust build-script scan, and a
+  `--network-report` runtime guardrail on
   `fastci test`/`fastci local` that reports which hosts a run contacted —
   see [`fastci guard`](#fastci-guard) above. `fastci local` is implemented
   for its core scope — auto-detecting CI's diff base branch from

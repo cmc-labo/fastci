@@ -29,6 +29,7 @@ func TestCheckersDetectTheirOwnEcosystem(t *testing.T) {
 		{guard.JSAudit{}, "package.json"},
 		{guard.PipAudit{}, "requirements.txt"},
 		{guard.CargoAudit{}, "Cargo.toml"},
+		{guard.CargoBuildScripts{}, "Cargo.toml"},
 	}
 	for _, c := range cases {
 		t.Run(c.checker.Name(), func(t *testing.T) {
@@ -105,8 +106,8 @@ func TestJSAuditSkipsWithoutAnyLockfile(t *testing.T) {
 func TestCheckersListedInFixedOrder(t *testing.T) {
 	names1 := checkerNames(guard.Checkers())
 	names2 := checkerNames(guard.Checkers())
-	if len(names1) != 5 {
-		t.Fatalf("Checkers() returned %d checkers, want 5", len(names1))
+	if len(names1) != 6 {
+		t.Fatalf("Checkers() returned %d checkers, want 6", len(names1))
 	}
 	for i := range names1 {
 		if names1[i] != names2[i] {

@@ -2,9 +2,11 @@ package guard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // CargoAudit wraps cargo-audit (https://github.com/rustsec/rustsec), the
@@ -30,5 +32,16 @@ func (CargoAudit) BinaryAvailable(dir string) (bool, string) {
 }
 
 func (CargoAudit) Run(ctx context.Context, dir string) (Result, error) {
-	return runChecker(ctx, "cargo-audit", dir, []string{"cargo", "audit"})
+	output, exitCode, err := runCmd(ctx, "cargo-audit", dir, []string{"cargo", "audit"}, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	// cargo-audit reuses the same exit code (1) both for a real finding
+	// and for failing to even update its advisory database first (e.g.
+	// over a flaky or firewalled network connection) - distinguishable
+	// only by its own, specific error message, never by exit code alone.
+	if exitCode != 0 && strings.Contains(output, "couldn't fetch advisory database") {
+		return Result{}, fmt.Errorf("cargo-audit: exited %d without completing the scan (failed to fetch the advisory database - not a vulnerability finding):\n%s", exitCode, output)
+	}
+	return Result{CheckerName: "cargo-audit", Output: output, FoundIssues: exitCode != 0}, nil
 }

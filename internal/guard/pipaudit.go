@@ -2,9 +2,11 @@ package guard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // PipAudit wraps pip-audit (https://pypi.org/project/pip-audit/), the PyPA
@@ -46,19 +48,43 @@ func (PipAudit) BinaryAvailable(dir string) (bool, string) {
 
 func (PipAudit) Run(ctx context.Context, dir string) (Result, error) {
 	args := []string{"pip-audit"}
+	var extraEnv []string
 	if _, err := os.Stat(filepath.Join(dir, "requirements.txt")); err == nil {
 		args = append(args, "-r", "requirements.txt")
-		return runChecker(ctx, "pip-audit", dir, args)
+	} else {
+		// No requirements.txt - falling back to auditing the active
+		// environment (see the type doc comment for why
+		// PIPAPI_PYTHON_LOCATION is required for that to actually target
+		// the right one). If "python3" isn't found at all, fall through
+		// and let pip-audit itself produce whatever error it normally
+		// would with no interpreter to guess from.
+		if python, err := exec.LookPath("python3"); err == nil {
+			extraEnv = []string{"PIPAPI_PYTHON_LOCATION=" + python}
+		}
 	}
 
-	// No requirements.txt - falling back to auditing the active
-	// environment (see the type doc comment for why PIPAPI_PYTHON_LOCATION
-	// is required for that to actually target the right one). If "python3"
-	// isn't found at all, fall through and let pip-audit itself produce
-	// whatever error it normally would with no interpreter to guess from.
-	var extraEnv []string
-	if python, err := exec.LookPath("python3"); err == nil {
-		extraEnv = []string{"PIPAPI_PYTHON_LOCATION=" + python}
+	output, exitCode, err := runCmd(ctx, "pip-audit", dir, args, extraEnv)
+	if err != nil {
+		return Result{}, err
 	}
-	return runCheckerEnv(ctx, "pip-audit", dir, args, extraEnv)
+	if exitCode != 0 && looksLikePipAuditInfraFailure(output) {
+		return Result{}, fmt.Errorf("pip-audit: exited %d without completing the audit (looks like a network or environment problem, not a vulnerability finding):\n%s", exitCode, output)
+	}
+	return Result{CheckerName: "pip-audit", Output: output, FoundIssues: exitCode != 0}, nil
+}
+
+// looksLikePipAuditInfraFailure reports whether output looks like
+// pip-audit failed to even complete its audit, rather than completing it
+// and reporting (or not reporting) a vulnerability - an unhandled Python
+// exception (its traceback format is a stable, decades-old Python/CPython
+// convention, not something pip-audit's own vulnerability-report format
+// could ever produce), or one of pip-audit's own logged internal errors
+// (its "ERROR:pip_audit.<module>:" prefix, from Python's standard
+// logging module - real examples seen include a failure to upgrade pip in
+// its scratch virtualenv, both observed in practice to come from a
+// network problem, never from a real finding, which pip-audit instead
+// reports as a formatted table).
+func looksLikePipAuditInfraFailure(output string) bool {
+	return strings.Contains(output, "Traceback (most recent call last):") ||
+		strings.Contains(output, "ERROR:pip_audit.")
 }

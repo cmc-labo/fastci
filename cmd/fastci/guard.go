@@ -71,7 +71,16 @@ func runGuard(cmd *cobra.Command) error {
 		fmt.Printf("fastci: running %s...\n", c.Name())
 		res, err := c.Run(cmd.Context(), cwd)
 		if err != nil {
-			return fmt.Errorf("guard %s: %w", c.Name(), err)
+			// An infra-level failure (a network hiccup fetching advisory
+			// data, most commonly - see e.g. govulncheck.go) is "couldn't
+			// check", the same as the tool not being installed at all -
+			// not a reason to abort every other checker too. A monorepo
+			// with, say, both a go.mod and a package.json should still get
+			// its npm audit run even if govulncheck's own network call
+			// failed.
+			fmt.Printf("fastci: %s: could not complete - %v\n", c.Name(), err)
+			anySkips = true
+			continue
 		}
 		if res.Output != "" {
 			fmt.Println(res.Output)

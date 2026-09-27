@@ -4,9 +4,9 @@
 // pip-audit, cargo-audit) - the same "delegate to the real toolchain"
 // approach the rest of fastci already takes for go/packages, esbuild, and
 // cargo metadata, rather than reimplementing something a language's own
-// tooling already does authoritatively. LifecycleScripts is the one
-// exception, since no equivalent official tool exists for that specific
-// check - see its own doc comment.
+// tooling already does authoritatively. LifecycleScripts and
+// CargoBuildScripts are the exceptions, since no equivalent official tool
+// exists for either specific check - see their own doc comments.
 //
 // A Checker's Run doesn't try to parse its underlying tool's findings into
 // a structured shape: vulnerability report formats vary and change across
@@ -59,16 +59,37 @@ type Checker interface {
 // binary, permission error, ...) is returned as err instead, since that's
 // an infra problem for the caller to report distinctly from "vulnerabilities
 // were found".
+//
+// This assumes the underlying tool uses the simplest possible convention:
+// exit 0 means clean, any other exit code means a finding. Several real
+// scanners don't: govulncheck reserves a specific exit code (3) for an
+// actual finding and uses others (most commonly 1) for the tool itself
+// failing - most often, in practice, a transient failure to fetch its
+// vulnerability database - and npm/pnpm/yarn audit, pip-audit, and
+// cargo-audit all reuse the very same exit code for both a real finding
+// and a network/infra failure fetching advisory data, distinguishable
+// only by a recognizable message in their own output. A checker for any
+// of those (see govulncheck.go, jsaudit.go, pipaudit.go, cargoaudit.go)
+// uses runCmd directly instead, so it can apply its own tool's actual
+// convention rather than this one - reporting a network hiccup as
+// FoundIssues would be a real, misleading false positive.
 func runChecker(ctx context.Context, name, dir string, argv []string) (Result, error) {
-	return runCheckerEnv(ctx, name, dir, argv, nil)
+	output, exitCode, err := runCmd(ctx, name, dir, argv, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{CheckerName: name, Output: output, FoundIssues: exitCode != 0}, nil
 }
 
-// runCheckerEnv is runChecker with extraEnv appended to the child's
-// environment (on top of the current process's own, matching
-// exec.Cmd's normal default when Env is left nil) - for a checker that
-// needs to steer its underlying tool beyond argv, e.g. pip-audit's
-// PIPAPI_PYTHON_LOCATION (see pipaudit.go).
-func runCheckerEnv(ctx context.Context, name, dir string, argv []string, extraEnv []string) (Result, error) {
+// runCmd runs argv in dir (with extraEnv appended to the current
+// process's own environment, if non-empty) and returns its combined
+// stdout+stderr and exit code (0 for success). err is non-nil only if the
+// command couldn't even be started (a missing binary, a permission
+// error, ...) - an ordinary non-zero exit is reported via exitCode, not
+// err, since interpreting what a particular exit code (or
+// exit-code-plus-message) actually means is each caller's own job; see
+// runChecker's doc comment for why that varies by tool.
+func runCmd(ctx context.Context, name, dir string, argv []string, extraEnv []string) (output string, exitCode int, err error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	if len(extraEnv) > 0 {
@@ -78,17 +99,15 @@ func runCheckerEnv(ctx context.Context, name, dir string, argv []string, extraEn
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 
-	res := Result{CheckerName: name}
-	err := cmd.Run()
-	res.Output = buf.String()
-	if err == nil {
-		return res, nil
+	runErr := cmd.Run()
+	output = buf.String()
+	if runErr == nil {
+		return output, 0, nil
 	}
-	if _, ok := err.(*exec.ExitError); ok {
-		res.FoundIssues = true
-		return res, nil
+	if exitErr, ok := runErr.(*exec.ExitError); ok {
+		return output, exitErr.ExitCode(), nil
 	}
-	return res, fmt.Errorf("%s: %w", name, err)
+	return output, -1, fmt.Errorf("%s: %w", name, runErr)
 }
 
 // Checkers lists every built-in Checker, in a fixed, stable order.
@@ -99,5 +118,6 @@ func Checkers() []Checker {
 		LifecycleScripts{},
 		PipAudit{},
 		CargoAudit{},
+		CargoBuildScripts{},
 	}
 }

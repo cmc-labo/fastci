@@ -2,9 +2,11 @@ package guard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // JSAudit runs the JS package manager's own built-in audit command,
@@ -44,7 +46,34 @@ func (JSAudit) BinaryAvailable(dir string) (bool, string) {
 
 func (JSAudit) Run(ctx context.Context, dir string) (Result, error) {
 	bin, args := jsAuditCommand(dir)
-	return runChecker(ctx, "js audit ("+bin+")", dir, append([]string{bin}, args...))
+	name := "js audit (" + bin + ")"
+	output, exitCode, err := runCmd(ctx, name, dir, append([]string{bin}, args...), nil)
+	if err != nil {
+		return Result{}, err
+	}
+	// npm/pnpm/yarn audit all reuse the very same exit code both for a
+	// real finding and for failing to even reach the registry's audit
+	// endpoint - distinguishable only by their own error text, never by
+	// exit code alone. npm's own text is verified directly; the Node.js
+	// network error codes (ECONNREFUSED et al.) are a broader net that
+	// should also catch pnpm's and yarn's own phrasing of the same
+	// underlying failure, since all three run on the same runtime.
+	if exitCode != 0 && looksLikeJSAuditInfraFailure(output) {
+		return Result{}, fmt.Errorf("%s: exited %d without completing the audit (looks like a network problem reaching the registry, not a vulnerability finding):\n%s", name, exitCode, output)
+	}
+	return Result{CheckerName: name, Output: output, FoundIssues: exitCode != 0}, nil
+}
+
+func looksLikeJSAuditInfraFailure(output string) bool {
+	if strings.Contains(output, "audit endpoint returned an error") {
+		return true
+	}
+	for _, code := range []string{"ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET"} {
+		if strings.Contains(output, code) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasJSLockfile(dir string) bool {
