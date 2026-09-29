@@ -376,6 +376,13 @@ this way is reported as "could not complete", the same as a missing
 binary, rather than as a finding, and - like a missing binary - never
 stops `guard` from still running every other applicable check.
 
+Each check also runs in its own process group with a bounded timeout (a
+few minutes - generous for an ordinary scan, including a fresh advisory-
+database fetch), so a single scanner that hangs outright can't block the
+rest of `guard`, or the CI job running it, forever - found to matter in
+practice, not just in theory, since some of these tools do spawn their
+own child processes that don't always exit cleanly on a failure.
+
 `guard`'s other, runtime piece is a `--network-report` flag on `fastci
 test` (and `fastci local`, below) rather than its own subcommand, since
 it has to wrap the actual test/build process running - something only

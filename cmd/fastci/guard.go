@@ -1,13 +1,28 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/hpscript/fastci/internal/guard"
 )
+
+// checkerTimeout bounds a single Checker.Run call. These are ordinary
+// vulnerability/advisory scans, not test suites: a well-behaved run takes
+// seconds to at most a couple of minutes (a fresh advisory-database
+// fetch, most commonly - see e.g. cargoaudit.go), so this is generous,
+// not tight. It exists as a last-resort safety net, not the primary fix,
+// for a checker's underlying tool hanging outright - which does happen in
+// practice, not just in theory (a real pnpm bug: on a network failure, it
+// can leave a child process holding stdout/stderr open after its own
+// top-level process has already exited) - so that a single hung scanner
+// can never block the rest of `fastci guard`, or the CI job running it,
+// forever.
+const checkerTimeout = 5 * time.Minute
 
 func newGuardCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -69,7 +84,9 @@ func runGuard(cmd *cobra.Command) error {
 		}
 
 		fmt.Printf("fastci: running %s...\n", c.Name())
-		res, err := c.Run(cmd.Context(), cwd)
+		ctx, cancel := context.WithTimeout(cmd.Context(), checkerTimeout)
+		res, err := c.Run(ctx, cwd)
+		cancel()
 		if err != nil {
 			// An infra-level failure (a network hiccup fetching advisory
 			// data, most commonly - see e.g. govulncheck.go) is "couldn't

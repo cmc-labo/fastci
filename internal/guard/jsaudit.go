@@ -54,10 +54,15 @@ func (JSAudit) Run(ctx context.Context, dir string) (Result, error) {
 	// npm/pnpm/yarn audit all reuse the very same exit code both for a
 	// real finding and for failing to even reach the registry's audit
 	// endpoint - distinguishable only by their own error text, never by
-	// exit code alone. npm's own text is verified directly; the Node.js
-	// network error codes (ECONNREFUSED et al.) are a broader net that
-	// should also catch pnpm's and yarn's own phrasing of the same
-	// underlying failure, since all three run on the same runtime.
+	// exit code alone. Each of the three's own specific text (npm's
+	// "audit endpoint returned an error", pnpm's "ERR_PNPM_AUDIT_BAD_
+	// RESPONSE") is verified directly against the real tool; the Node.js
+	// network error codes (ECONNREFUSED et al.) and the plain-English
+	// "Connection refused"/"Connection reset" phrasing (pnpm's own Rust
+	// HTTP client prints the OS errno's description, not a Node-style
+	// error code) are a broader net for whatever exact wording any of the
+	// three uses for the same underlying failure in a slightly different
+	// version.
 	if exitCode != 0 && looksLikeJSAuditInfraFailure(output) {
 		return Result{}, fmt.Errorf("%s: exited %d without completing the audit (looks like a network problem reaching the registry, not a vulnerability finding):\n%s", name, exitCode, output)
 	}
@@ -65,11 +70,14 @@ func (JSAudit) Run(ctx context.Context, dir string) (Result, error) {
 }
 
 func looksLikeJSAuditInfraFailure(output string) bool {
-	if strings.Contains(output, "audit endpoint returned an error") {
-		return true
+	markers := []string{
+		"audit endpoint returned an error",                     // npm
+		"ERR_PNPM_AUDIT_BAD_RESPONSE",                          // pnpm
+		"ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET", // Node.js network error codes
+		"Connection refused", "Connection reset", "Connection timed out", // OS errno text (e.g. pnpm's Rust HTTP client)
 	}
-	for _, code := range []string{"ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET"} {
-		if strings.Contains(output, code) {
+	for _, m := range markers {
+		if strings.Contains(output, m) {
 			return true
 		}
 	}

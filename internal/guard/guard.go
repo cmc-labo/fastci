@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 // Result is the outcome of running one Checker.
@@ -95,6 +97,7 @@ func runCmd(ctx context.Context, name, dir string, argv []string, extraEnv []str
 	if len(extraEnv) > 0 {
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
+	isolateProcessGroup(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -108,6 +111,31 @@ func runCmd(ctx context.Context, name, dir string, argv []string, extraEnv []str
 		return output, exitErr.ExitCode(), nil
 	}
 	return output, -1, fmt.Errorf("%s: %w", name, runErr)
+}
+
+// killGrace is how long a cancelled checker is given to shut down after
+// SIGTERM before it's forced with SIGKILL - see isolateProcessGroup.
+const killGrace = 10 * time.Second
+
+// isolateProcessGroup puts cmd in its own process group and arranges for
+// context cancellation (including cmd/fastci/guard.go's own bounded
+// per-checker timeout) to signal the *whole group*, not just the direct
+// child - mirroring internal/runner.Run's identical fix for the same
+// underlying problem with test runners, for the same reason: none of the
+// scanners guard drives are guaranteed to be leaf processes (found in
+// practice - not just in theory - when pnpm audit, on a network failure,
+// left a child process holding stdout/stderr open after pnpm's own
+// top-level process had already exited, which made a plain
+// exec.CommandContext hang indefinitely waiting for the pipe to see EOF,
+// since only the already-exited direct child had been the one killed).
+// Unlike runner.Run, this never has to special-case a real controlling
+// terminal: no scanner guard drives ever needs interactive input.
+func isolateProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = killGrace
 }
 
 // Checkers lists every built-in Checker, in a fixed, stable order.

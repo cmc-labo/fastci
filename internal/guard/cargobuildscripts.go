@@ -82,6 +82,7 @@ func (CargoBuildScripts) Run(ctx context.Context, dir string) (Result, error) {
 	// would corrupt the JSON with that interleaved text.
 	cmd := exec.CommandContext(ctx, "cargo", "metadata", "--format-version=1")
 	cmd.Dir = dir
+	isolateProcessGroup(cmd)
 	stdout, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
