@@ -43,12 +43,24 @@ func (GoVulnCheck) Run(ctx context.Context, dir string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	foundIssues, isInfraFailure := classifyGoVulnCheckExit(exitCode)
+	if isInfraFailure {
+		return Result{}, fmt.Errorf("govulncheck: exited %d without completing the scan (a usage error, or most commonly a failure to fetch its vulnerability database - not a vulnerability finding, which uses exit code %d specifically):\n%s", exitCode, govulncheckVulnerabilitiesFound, output)
+	}
+	return Result{CheckerName: "govulncheck", Output: output, FoundIssues: foundIssues}, nil
+}
+
+// classifyGoVulnCheckExit interprets a govulncheck exit code per its own
+// documented convention (see govulncheckVulnerabilitiesFound): exit 0 is
+// clean, that specific code is a real finding, and anything else is
+// treated as the tool itself failing to complete, not a finding.
+func classifyGoVulnCheckExit(exitCode int) (foundIssues, isInfraFailure bool) {
 	switch exitCode {
 	case 0:
-		return Result{CheckerName: "govulncheck", Output: output}, nil
+		return false, false
 	case govulncheckVulnerabilitiesFound:
-		return Result{CheckerName: "govulncheck", Output: output, FoundIssues: true}, nil
+		return true, false
 	default:
-		return Result{}, fmt.Errorf("govulncheck: exited %d without completing the scan (a usage error, or most commonly a failure to fetch its vulnerability database - not a vulnerability finding, which uses exit code %d specifically):\n%s", exitCode, govulncheckVulnerabilitiesFound, output)
+		return false, true
 	}
 }

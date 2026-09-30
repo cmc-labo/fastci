@@ -36,12 +36,19 @@ func (CargoAudit) Run(ctx context.Context, dir string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	// cargo-audit reuses the same exit code (1) both for a real finding
-	// and for failing to even update its advisory database first (e.g.
-	// over a flaky or firewalled network connection) - distinguishable
-	// only by its own, specific error message, never by exit code alone.
-	if exitCode != 0 && strings.Contains(output, "couldn't fetch advisory database") {
+	if exitCode != 0 && looksLikeCargoAuditInfraFailure(output) {
 		return Result{}, fmt.Errorf("cargo-audit: exited %d without completing the scan (failed to fetch the advisory database - not a vulnerability finding):\n%s", exitCode, output)
 	}
 	return Result{CheckerName: "cargo-audit", Output: output, FoundIssues: exitCode != 0}, nil
+}
+
+// looksLikeCargoAuditInfraFailure reports whether output looks like
+// cargo-audit failed to even complete its scan, rather than completing it
+// and reporting (or not reporting) a vulnerability. cargo-audit reuses the
+// very same exit code (1) both for a real finding and for failing to
+// update its advisory database first (e.g. over a flaky or firewalled
+// network connection) - distinguishable only by this specific message,
+// never by exit code alone.
+func looksLikeCargoAuditInfraFailure(output string) bool {
+	return strings.Contains(output, "couldn't fetch advisory database")
 }
