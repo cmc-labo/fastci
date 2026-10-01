@@ -26,6 +26,103 @@ This is an early, incrementally-developed project. Today it covers:
 
 See [Roadmap](#roadmap) for what's next.
 
+## Table of contents
+
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
+- [Usage](#usage)
+  - [Test-result cache (local and distributed)](#test-result-cache-local-and-distributed)
+  - [`fastci analyze`](#fastci-analyze)
+  - [`fastci guard`](#fastci-guard)
+  - [`fastci local`](#fastci-local)
+  - [Function-level impact analysis (Go)](#function-level-impact-analysis-go)
+- [GitHub Actions](#github-actions)
+- [Current limitations](#current-limitations)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+## Quickstart
+
+### 1. Install
+
+fastci itself is a single Go binary, installed with `go install` — this is
+required even if the project you'll run it *against* is JavaScript, Python,
+or Rust; only building fastci needs a Go toolchain, not your project:
+
+```sh
+go install github.com/hpscript/fastci/cmd/fastci@latest
+```
+
+This needs Go on your machine ([install Go](https://go.dev/doc/install) if
+you don't have it) — Go 1.21 or later is enough, since `GOTOOLCHAIN=auto`
+(the default since Go 1.21) transparently downloads whatever newer toolchain
+fastci's own `go.mod` requires.
+
+Verify it installed and is on your `PATH`:
+
+```sh
+fastci --help
+```
+
+If that prints `command not found: fastci`, `go install` put the binary in
+`$(go env GOPATH)/bin`, which isn't on `PATH` by default on many systems:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+Add that line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make
+it permanent.
+
+### 2. Run it against your own project
+
+`cd` into your project's root — wherever its `go.mod`/`go.work`,
+`vitest.config.*`, Jest-configured `package.json`, pytest config, or
+`Cargo.toml` lives (see [How it works](#how-it-works) for exactly what's
+auto-detected) — and first preview what fastci would do, without running
+anything:
+
+```sh
+fastci test --dry-run -v
+```
+
+On a clean working tree this reports `fastci: no changed files detected,
+nothing to test` — that's expected, since fastci narrows based on your git
+diff, not on the whole project. Make a small, real edit to one file (or
+check out a branch that already has one), then try again. You should see
+the file(s) you changed and the test targets fastci selected because of
+them. Once you're satisfied it picked the right thing, drop `--dry-run` to
+actually run them:
+
+```sh
+fastci test
+```
+
+### 3. Try a PR-style diff
+
+The commands above compare your working tree against `HEAD` — uncommitted
+changes. To preview what a pull request would trigger instead (committed
+changes against a target branch, the way CI sees it):
+
+```sh
+fastci test --base origin/main
+```
+
+### 4. Wire it into CI
+
+See [GitHub Actions](#github-actions) below for a drop-in workflow step that
+runs this automatically on every pull request.
+
+That's the core loop. Everything else in this README is reference
+material: the full [flag list and output format per language](#usage), the
+[test-result cache](#test-result-cache-local-and-distributed), [`fastci
+analyze`](#fastci-analyze) (AI-assisted failure triage), [`fastci
+guard`](#fastci-guard) (vulnerability scanning), [`fastci
+local`](#fastci-local) (reproduce CI locally), and
+[per-language limitations](#current-limitations). If something doesn't
+behave as expected, check [Troubleshooting](#troubleshooting) first.
+
 ## How it works
 
 1. `fastci test` auto-detects the project type in the working directory
@@ -83,12 +180,6 @@ See [Roadmap](#roadmap) for what's next.
    adds an optional, separate safety net for the opposite situation - a
    diff broad enough that per-file narrowing itself carries more risk than
    it saves.
-
-## Install
-
-```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
-```
 
 ## Usage
 
@@ -735,6 +826,67 @@ error rather than a bare `git` failure.
 - Building the graph requires `cargo` on `PATH`; it shells out to
   `cargo metadata`, which (like `go list`) may need network access the
   first time it resolves a new dependency.
+
+## Troubleshooting
+
+**`command not found: fastci` after `go install`**
+`go install` places the binary in `$(go env GOPATH)/bin`, which isn't on
+`PATH` by default on many systems. Add it:
+`export PATH="$PATH:$(go env GOPATH)/bin"` — see
+[Quickstart](#quickstart).
+
+**`fastci: no supported project detected in <dir>`**
+fastci auto-detects the project type by looking for one of: a Go
+`go.mod`/`go.work`, a Vitest config or `vitest` dependency, a
+Jest-configured `package.json`, a pytest config (`pytest.ini`,
+`conftest.py`, or a `[tool.pytest.ini_options]`/`[tool:pytest]` section), or
+a `Cargo.toml`. Run fastci from that project's own root directory, not a
+subdirectory of it or a parent directory containing several unrelated
+projects. Note that `fastci test` picks a single project type per run (the
+first match, in a monorepo with more than one at the same root) — `fastci
+guard`, by contrast, detects and runs *every* applicable check in a
+monorepo; see [`fastci guard`](#fastci-guard).
+
+**`fastci: no changed files detected, nothing to test`**
+Expected on a clean working tree: fastci narrows based on your git diff
+(uncommitted changes by default, or `--base <ref>` for a diff against a
+specific ref). Make an actual edit, pass `--base` against the right ref, or
+use `--all` to run everything regardless of any diff.
+
+**A shallow CI checkout and `--base`**
+See [the note under GitHub Actions](#github-actions) — a `fetch-depth: 1`
+checkout (or any other shallow/partial one) is detected automatically and
+recovered from (an on-demand `git fetch --unshallow` or equivalent), at the
+cost of one extra network fetch on the first invocation. A total failure to
+fetch (no network, a `--base` ref that doesn't exist at all, permissions)
+is reported as a clear error rather than a bare `git` failure.
+
+**`fastci analyze` says there's nothing to analyze, or errors about a
+missing API key**
+It needs `ANTHROPIC_API_KEY` in the environment, and only has something to
+diagnose after a `fastci test` run that actually failed — if the last run
+passed, or none has run yet, it says so rather than erroring; see [`fastci
+analyze`](#fastci-analyze).
+
+**`fastci guard` reports "could not complete", or skips a check with an
+install hint**
+That's "couldn't check", not "checked and found a problem" — either the
+underlying scanner isn't installed yet (the printed hint is the exact
+install command) or it failed to complete for an infrastructure reason
+(most commonly, no network access to fetch its vulnerability/advisory
+database), not because it actually found and is reporting a vulnerability.
+See [`fastci guard`](#fastci-guard) for the full table of scanners and
+their install commands.
+
+**Nothing seems to get narrowed — every test still runs**
+First check `--why <file-or-package>` (see [Usage](#usage)) for fastci's
+actual reasoning about that specific target. Running everything can also
+be the deliberately correct outcome: a changed manifest/lockfile, an
+unresolvable dynamic import, or a diff wide enough to cross
+`--full-run-threshold` are all designed to fall back to a full run rather
+than risk silently skipping something that matters — see [Current
+limitations](#current-limitations) for what else triggers this per
+language.
 
 ## Roadmap
 
