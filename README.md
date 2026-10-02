@@ -34,6 +34,7 @@ See [Roadmap](#roadmap) for what's next.
   - [Test-result cache (local and distributed)](#test-result-cache-local-and-distributed)
   - [`fastci analyze`](#fastci-analyze)
   - [`fastci guard`](#fastci-guard)
+    - [PipAudit (Python)](#pipaudit-python)
   - [`fastci local`](#fastci-local)
   - [Function-level impact analysis (Go)](#function-level-impact-analysis-go)
 - [GitHub Actions](#github-actions)
@@ -419,6 +420,62 @@ detection itself:
 | JS/TS | `npm audit` / `pnpm audit` / `yarn audit` (picked by lockfile) | comes with Node.js |
 | Python | [`pip-audit`](https://pypi.org/project/pip-audit/) | `pip install pip-audit` |
 | Rust | [`cargo-audit`](https://github.com/rustsec/rustsec) | `cargo install cargo-audit` |
+
+#### PipAudit (Python)
+
+**Detection** — this check becomes applicable whenever the working
+directory contains a `requirements.txt`, `pyproject.toml`, `Pipfile`,
+`setup.py`, or `setup.cfg`; otherwise it's skipped entirely, the same as
+any inapplicable checker (not reported as a failure).
+
+**What it audits**:
+- If a `requirements.txt` is present, it's audited directly
+  (`pip-audit -r requirements.txt`) — the project's own dependencies don't
+  need to be installed first, the same no-install-required approach
+  fastci's own pytest analyzer already uses to build its import graph.
+- Otherwise (e.g. a `pyproject.toml`-only project, or one with no
+  `requirements.txt` committed), it falls back to pip-audit's own default
+  behavior: auditing every package already installed in the active Python
+  environment.
+
+**Configuration** — there's no fastci-specific config file or flag for
+this; the one thing worth understanding is how the active-environment
+fallback targets the right interpreter. By default, pip-audit resolves
+installed packages against whatever Python interpreter *it itself* happens
+to be installed under (`sys.executable`), not necessarily the project's
+active virtualenv — a pip-audit installed globally or via `pipx` would
+otherwise silently audit a completely unrelated environment (pip-audit
+even warns about this itself: "This may result in unintuitive audits").
+To avoid that, this checker points pip-audit at whatever `python3` resolves
+to on `PATH`, via pip-audit's own `PIPAPI_PYTHON_LOCATION` environment
+variable. Practically, that means: **activate the project's virtualenv (or
+otherwise make sure its `python3` is first on `PATH`) before running
+`fastci guard`** when relying on this fallback — a `requirements.txt`
+doesn't need this, since it's audited directly without touching any
+environment.
+
+**Vulnerabilities detected** — pip-audit queries PyPI's own vulnerability
+data by default (its `pypi` vulnerability service, no API key or extra
+setup needed), backed by the
+[PyPA Advisory Database](https://github.com/pypa/advisory-database)/[OSV.dev](https://osv.dev)'s
+Python advisories. Each finding reports the affected package and installed
+version, the advisory ID (`PYSEC-...`, often with a cross-referenced
+`CVE-...`/`GHSA-...` alias), and the fixed version(s) to upgrade to — the
+same information running `pip-audit` directly would print. This covers
+both direct and transitive dependencies actually resolved from the
+requirements file or environment; unlike govulncheck for Go, it does not
+do reachability analysis — a vulnerable package merely being installed is
+reported regardless of whether your code actually calls the vulnerable
+code path.
+
+**Real finding vs. an infrastructure failure** — like the other scanners
+`fastci guard` wraps, pip-audit reuses the same exit code both for "found
+vulnerabilities" and for failing to even complete the audit (most commonly
+no network access to fetch vulnerability data). This checker tells the two
+apart from pip-audit's own output: an unhandled Python traceback, or one of
+its own logged `ERROR:pip_audit.*` messages, is treated as "could not
+complete" rather than a finding — see the exit-code note below for why
+this distinction matters in general.
 
 Two checks are fastci's own, since no equivalent official tool exists for
 either:
