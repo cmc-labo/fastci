@@ -35,6 +35,7 @@ See [Roadmap](#roadmap) for what's next.
   - [`fastci analyze`](#fastci-analyze)
   - [`fastci guard`](#fastci-guard)
     - [PipAudit (Python)](#pipaudit-python)
+    - [LifecycleScripts (JS/TS)](#lifecyclescripts-jsts)
   - [`fastci local`](#fastci-local)
   - [Function-level impact analysis (Go)](#function-level-impact-analysis-go)
 - [GitHub Actions](#github-actions)
@@ -496,6 +497,60 @@ either:
   filename guess) runs arbitrary Rust code before the crate's own code is
   even compiled. Same non-judgmental framing as the lifecycle-script scan:
   linking a C library or emitting `cfg` flags are common, legitimate uses.
+
+#### LifecycleScripts (JS/TS)
+
+**Detection** — this check becomes applicable whenever the working
+directory contains a `package.json`. It additionally requires a
+`node_modules` directory to actually scan; if one doesn't exist yet (no
+`npm install`/`pnpm install`/`yarn install` has been run), it's skipped
+with that install hint printed, the same as a missing scanner binary for
+any of the other checks — not reported as a failure.
+
+**What it scans** — it walks every `package.json` under `node_modules`
+(including scoped packages like `@org/name`, and every level of nested,
+transitive `node_modules`) and reads each one's own `scripts` field
+looking for a `preinstall`, `install`, or `postinstall` entry. This is a
+pure, read-only filesystem scan: it never runs `npm install` (or any
+install command) itself and never executes any script it finds — fastci
+shouldn't trigger arbitrary code execution as a side effect of running a
+security scan. It only reports on dependencies **already installed on
+disk** at scan time, so results reflect whatever `node_modules` currently
+contains; reinstalling or updating dependencies and re-running `fastci
+guard` picks up any change.
+
+**Configuration** — there's nothing to configure: no flags, no ignore
+list, no config file. It isn't meant to replace judgment, so it doesn't
+try to decide which scripts are suspicious — see "risk" below.
+
+**Risk this surfaces** — an install-time lifecycle script is real,
+long-standing attack surface in the npm ecosystem: it's the exact
+mechanism behind supply-chain attacks like event-stream (2018) and
+ua-parser-js (2021), where malicious code ran automatically the moment a
+compromised package was installed, before any application code ever
+executed and often before a human ever looked at what was pulled in. A
+lifecycle script is **not inherently malicious** — plenty of legitimate,
+widely-used packages (esbuild, puppeteer, husky, core-js, and others) use
+one to fetch a prebuilt binary, compile a native addon, or set up git
+hooks — so this check deliberately doesn't try to judge intent or flag
+specific packages as bad. It only surfaces *which* installed dependencies
+can run arbitrary code automatically at install time, so a human can
+decide whether each one is expected.
+
+Example output:
+
+```
+$ fastci guard
+fastci: running npm/pnpm/yarn lifecycle scripts...
+2 installed dependencies define an install-time lifecycle script - not necessarily malicious, but each one runs code automatically during install, so review any you don't recognize:
+  @org/native-thing@0.1.0: preinstall
+  sketchy-pkg@2.1.0: postinstall
+fastci: npm/pnpm/yarn lifecycle scripts reported issues (see above)
+```
+
+A clean result (no installed dependency defines any of the three scripts)
+reports `no installed dependency defines a preinstall/install/postinstall
+script` and doesn't count as an issue.
 
 ```sh
 fastci guard
