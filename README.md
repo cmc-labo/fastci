@@ -36,6 +36,8 @@ See [Roadmap](#roadmap) for what's next.
   - [`fastci guard`](#fastci-guard)
     - [PipAudit (Python)](#pipaudit-python)
     - [LifecycleScripts (JS/TS)](#lifecyclescripts-jsts)
+    - [CargoBuildScripts (Rust)](#cargobuildscripts-rust)
+    - [Network egress guardrail (`--network-report`)](#network-egress-guardrail---network-report)
   - [`fastci local`](#fastci-local)
   - [Function-level impact analysis (Go)](#function-level-impact-analysis-go)
 - [GitHub Actions](#github-actions)
@@ -552,6 +554,62 @@ A clean result (no installed dependency defines any of the three scripts)
 reports `no installed dependency defines a preinstall/install/postinstall
 script` and doesn't count as an issue.
 
+#### CargoBuildScripts (Rust)
+
+**Detection** — this check becomes applicable whenever the working
+directory contains a `Cargo.toml`. It requires `cargo` on `PATH` to run
+(not `cargo-audit` — plain `cargo`, already required to build the project
+at all); if `cargo` isn't found, it's skipped with that install hint
+printed, the same as a missing scanner binary for any other check — not
+reported as a failure.
+
+**What it scans** — it runs `cargo metadata --format-version=1` and reads
+its structured JSON output for every package's own build targets, flagging
+any **dependency** (direct or transitive) whose target list includes one
+of kind `"custom-build"` — Cargo's own resolution of whatever `Cargo.toml`'s
+`build` field actually names (conventionally `build.rs`, but not
+necessarily), not a filename guess. Only *dependencies* are in scope, the
+same way [LifecycleScripts](#lifecyclescripts-jsts) only scans
+`node_modules`: a project's own build script is something its own
+developers already wrote and can already see, not a third-party
+supply-chain risk, so the project's own root crate (and every other member
+of its own `[workspace]`, if any) is never flagged, no matter what its own
+`build` field says. Because `cargo metadata` resolves the real dependency
+graph the same way `cargo build`/`cargo test` would, this needs network
+access the first time it resolves a new dependency, same as an ordinary
+build.
+
+**Configuration** — there's nothing to configure: no flags, no ignore
+list, no config file, matching LifecycleScripts' same deliberately
+judgment-free design.
+
+**Risk this surfaces** — a build script (`build.rs`) runs arbitrary Rust
+code automatically at *build* time, before the crate's own code is even
+compiled or used — the same class of supply-chain risk as a JS/TS
+install-time lifecycle script (see
+[LifecycleScripts](#lifecyclescripts-jsts)), just triggered by `cargo
+build`/`cargo test` instead of a package-manager install step, and real
+malicious-crate incidents have used exactly this mechanism. A build script
+is **not inherently malicious** — linking a system C library, generating
+code from a schema, or emitting `cfg` flags for conditional compilation
+are all common, legitimate uses — so, like LifecycleScripts, this
+deliberately doesn't try to judge intent. It only surfaces *which*
+dependency crates can run code at build time, so a human can decide
+whether each one is expected.
+
+Example output:
+
+```
+$ fastci guard
+fastci: running cargo build scripts...
+1 dependency defines a custom build script - not necessarily malicious, but each one runs arbitrary code automatically at build time, so review any you don't recognize:
+  dep@0.1.0: /path/to/dep/build.rs
+fastci: cargo build scripts reported issues (see above)
+```
+
+A clean result (no dependency defines a custom build script) reports `no
+dependency defines a custom build script` and doesn't count as an issue.
+
 ```sh
 fastci guard
 ```
@@ -589,11 +647,27 @@ own child processes that don't always exit cleanly on a failure.
 `guard`'s other, runtime piece is a `--network-report` flag on `fastci
 test` (and `fastci local`, below) rather than its own subcommand, since
 it has to wrap the actual test/build process running - something only
-those two already do:
+those two already do.
+
+#### Network egress guardrail (`--network-report`)
+
+**Activation** — unlike the Checkers above, this isn't auto-detected; it's
+an opt-in flag you pass explicitly, since it changes how the test/build
+run itself executes rather than running an independent scan alongside it:
 
 ```sh
 fastci test --network-report
+fastci local --network-report   # same flag, same behavior
 ```
+
+**What it does** — it starts a small local forward proxy on an ephemeral
+port and points the test/build run at it by setting `HTTP_PROXY`,
+`HTTPS_PROXY`, and their lowercase variants (`http_proxy`/`https_proxy` -
+different tools disagree on which casing they honor, so both are set) for
+the duration of that one run only; whatever those variables held before
+(a real corporate proxy, say, or nothing at all) is restored exactly once
+the run finishes, even if the run itself fails. Every distinct host the
+run contacted through the proxy is then reported:
 
 ```
 $ fastci test --network-report
@@ -602,16 +676,40 @@ fastci: network report: 1 host(s) contacted:
   example.com:80
 ```
 
-It points the test/build run at a small local proxy (via
-`HTTP_PROXY`/`HTTPS_PROXY`, restored to whatever they were before once the
-run finishes) and reports every host it contacted - useful for noticing a
-dependency phoning home somewhere unexpected during a build or test run.
-HTTPS traffic is tunneled through the proxy unmodified: it only ever reads
-the plaintext `CONNECT host:port` line itself to learn the destination, and
-never holds a TLS certificate/key that would let it decrypt or inspect
-anything past that. It's purely informational - it doesn't block or fail
-the run based on what it sees, unlike the allowlist-enforcement approach
-some tools take, which this deliberately doesn't do.
+```
+$ fastci test --network-report
+ok  	example.com/netcheck	0.191s
+fastci: network report: no outbound connections observed
+```
+
+This is useful for noticing a dependency phoning home somewhere
+unexpected during a build or test run - a postinstall/build script (see
+[LifecycleScripts](#lifecyclescripts-jsts)/[CargoBuildScripts](#cargobuildscripts-rust)
+above) reaching out to a host that has nothing to do with the package
+registry, for instance.
+
+**What it can see** — HTTPS traffic (the overwhelming majority of real
+traffic: virtually every package registry and API fastci-driven tooling
+talks to is HTTPS) is tunneled through the proxy unmodified: it only ever
+reads the plaintext `CONNECT host:port` line itself to learn the
+destination, then splices the raw TCP connection through byte-for-byte -
+it never holds a TLS certificate/key that would let it decrypt or inspect
+anything past that line. Plain HTTP requests are forwarded the same way an
+ordinary HTTP forward proxy does, which does mean their request line and
+headers pass through in the clear (rare in practice, for the reason
+above).
+
+**Configuration and limitations** — there's no port, host, or allowlist to
+configure; it's purely informational and never blocks or fails the run
+based on what it sees, unlike the allowlist-enforcement approach some
+tools take, which this deliberately doesn't do. The one real limitation
+worth knowing: it can only see traffic from a tool that actually honors
+`HTTP_PROXY`/`HTTPS_PROXY` (or the lowercase variants) in the first
+place - nearly all HTTP(S) clients in every ecosystem fastci targets do,
+but a tool making a raw TCP/UDP connection, resolving DNS itself and
+dialing an IP directly, or otherwise ignoring the proxy environment
+variables entirely, would make a real outbound connection that never
+passes through the proxy and so never appears in the report.
 
 ### `fastci local`
 
