@@ -416,7 +416,10 @@ alternative endpoint.)
 Phase 3's `fastci guard` (see [Roadmap](#roadmap)): supply-chain security
 scanning. Most of its checks run each ecosystem's own official, trusted
 scanner and report what it finds, rather than implementing vulnerability
-detection itself:
+detection itself. This is the full reference; for a hands-on, worked
+walkthrough of every feature (install steps, a vulnerable-dependency
+fix-it example, CI setup), see
+[docs/guard-guide.md](docs/guard-guide.md).
 
 | Ecosystem | Scanner | Install |
 | --- | --- | --- |
