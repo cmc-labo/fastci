@@ -1,6 +1,7 @@
 package testcache
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,16 +30,49 @@ import (
 // treated the same as a cache miss (or "the pass didn't get recorded
 // remotely", for a failed Put), with one warning printed to stderr per run
 // so a persistently unreachable remote doesn't fail silently forever, but
-// without a flaky or down remote spamming a line per target.
+// without a flaky or down remote spamming a line per target. A circuit
+// breaker (see maxConsecutiveFailures) additionally stops attempting the
+// remote at all for the rest of the run after enough consecutive
+// transport-level failures, so a down-but-slow-to-fail remote degrades to
+// a bounded delay, not a real multi-minute stall across a large target
+// set.
 type remoteCache struct {
 	baseURL string
 	token   string
 	client  *http.Client
 
 	warnOnce sync.Once
+
+	// mu guards failures/unreachable, the circuit breaker below.
+	mu          sync.Mutex
+	failures    int
+	unreachable bool
 }
 
 const remoteCacheTimeout = 5 * time.Second
+
+// maxConsecutiveFailures is the circuit breaker's trip threshold: once
+// this many consecutive requests fail at the transport level (couldn't
+// even complete the round trip - a timeout, connection refused, DNS
+// failure - as opposed to a request that reached the server and got back
+// an ordinary HTTP status), do is short-circuited for the rest of this
+// Cache's lifetime (one `fastci test`/`fastci local` invocation) instead
+// of still attempting - and waiting out remoteCacheTimeout for - every
+// remaining target. Without this, a remote that's merely slow to fail
+// (e.g. a firewall silently dropping packets rather than refusing the
+// connection outright) degrades "just don't use the remote cache" from a
+// documented, cheap no-op into a real multi-minute stall on a large
+// target set, one remoteCacheTimeout at a time, remoteConcurrency
+// requests at a time - which defeats the entire point of this being
+// best-effort. A request that reaches the server at all (any HTTP
+// response, even an error one) resets the counter: that's a config
+// problem (wrong token, wrong path), not an unreachable remote, and
+// doesn't warrant giving up on every other target too.
+const maxConsecutiveFailures = 3
+
+// errRemoteUnreachable is returned by do once the circuit breaker has
+// tripped, short-circuiting without attempting the network call at all.
+var errRemoteUnreachable = errors.New("remote cache: too many consecutive failures, no longer attempting to reach it this run")
 
 // remoteFromEnv builds a remoteCache from FASTCI_REMOTE_CACHE_URL (and
 // optional FASTCI_REMOTE_CACHE_TOKEN, sent as a bearer token), or returns
@@ -56,6 +90,9 @@ func remoteFromEnv() *remoteCache {
 }
 
 func (r *remoteCache) do(method, key string, body io.Reader) (*http.Response, error) {
+	if r.tripped() {
+		return nil, errRemoteUnreachable
+	}
 	req, err := http.NewRequest(method, r.baseURL+"/"+key, body)
 	if err != nil {
 		return nil, err
@@ -63,7 +100,33 @@ func (r *remoteCache) do(method, key string, body io.Reader) (*http.Response, er
 	if r.token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.token)
 	}
-	return r.client.Do(req)
+	resp, err := r.client.Do(req)
+	r.recordOutcome(err == nil)
+	return resp, err
+}
+
+// tripped reports whether the circuit breaker has already fired.
+func (r *remoteCache) tripped() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.unreachable
+}
+
+// recordOutcome updates the circuit breaker: ok is whether the request
+// completed the round trip at all (reaching the server and getting back
+// some HTTP response, regardless of status code), not whether that
+// response was a cache hit/success.
+func (r *remoteCache) recordOutcome(ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ok {
+		r.failures = 0
+		return
+	}
+	r.failures++
+	if r.failures >= maxConsecutiveFailures {
+		r.unreachable = true
+	}
 }
 
 // get reports whether key has a recorded pass on the remote.
@@ -75,6 +138,9 @@ func (r *remoteCache) get(key string) bool {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		r.warn(fmt.Sprintf("remote cache GET %s: unexpected status %s", key, resp.Status))
+	}
 	return resp.StatusCode == http.StatusOK
 }
 

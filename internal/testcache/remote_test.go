@@ -1,11 +1,15 @@
 package testcache_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/testcache"
 )
 
@@ -200,4 +204,85 @@ func TestRecordPassPushesToRemote(t *testing.T) {
 	if store.putCount != 3 {
 		t.Errorf("remote PUT count = %d, want 3 (one per target)", store.putCount)
 	}
+}
+
+// newTransportFailingServer returns a server that fails every request at
+// the transport level - it hijacks the raw connection and closes it
+// without ever writing an HTTP response - rather than responding with an
+// ordinary (if unsuccessful) HTTP status. That distinction matters: only
+// a transport-level failure (the client can't complete the round trip at
+// all) should trip the circuit breaker; an HTTP error response from a
+// reachable server deliberately should not (see recordOutcome in
+// remote.go). attempts counts every request the server actually received,
+// so a test can tell a real network attempt from one the circuit breaker
+// skipped.
+func newTransportFailingServer(t *testing.T) (attempts *atomic.Int32, srv *httptest.Server) {
+	t.Helper()
+	attempts = &atomic.Int32{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("ResponseWriter doesn't support hijacking")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+	return attempts, srv
+}
+
+// manyLeafGraph builds n independent, distinct-content leaf nodes (no
+// imports, no shared dependencies) so each gets its own distinct cache
+// key and none can be satisfied by another's lookup - unlike buildGraph's
+// fixed 3-node chain, this needs to comfortably exceed remoteConcurrency
+// to actually exercise the circuit breaker across concurrent workers.
+func manyLeafGraph(t *testing.T, dir string, n int) (*graph.Graph, []string) {
+	t.Helper()
+	g := graph.New()
+	targets := make([]string, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("leaf%d", i)
+		targets[i] = id
+		f := filepath.Join(dir, id+".go")
+		writeFile(t, f, fmt.Sprintf("package p\nfunc Leaf%d() int { return %d }\n", i, i))
+		g.Node(id).Files = []string{f}
+	}
+	return g, targets
+}
+
+// TestFilterCircuitBreakerBoundsAttemptsAgainstADeadRemote reproduces a
+// real robustness gap: without a circuit breaker, a remote that's slow to
+// fail (here, simulated as failing every single request, which is the
+// worst case) gets a fresh network attempt for every target that misses
+// locally, one remoteConcurrency batch at a time - for a large target
+// set, that's a real, multi-request stall even though each individual
+// call is "best-effort". The fix should bound the number of actual
+// network attempts to roughly one concurrency batch, regardless of how
+// many targets are being filtered.
+func TestFilterCircuitBreakerBoundsAttemptsAgainstADeadRemote(t *testing.T) {
+	attempts, srv := newTransportFailingServer(t)
+	t.Setenv("FASTCI_REMOTE_CACHE_URL", srv.URL)
+
+	const targetCount = 40
+	dir := t.TempDir()
+	g, targets := manyLeafGraph(t, dir, targetCount)
+	c := testcache.Open(dir)
+
+	hits, misses := c.Filter(g, "go", nil, targets)
+	if len(hits) != 0 {
+		t.Errorf("hits = %v, want none from a dead remote", hits)
+	}
+	if len(misses) != targetCount {
+		t.Errorf("misses = %d, want all %d targets", len(misses), targetCount)
+	}
+
+	got := attempts.Load()
+	if got >= int32(targetCount) {
+		t.Errorf("remote received %d requests for %d targets - the circuit breaker should have stopped attempting the remote well before every target got its own network round trip", got, targetCount)
+	}
+	t.Logf("remote received %d actual network attempts for %d targets", got, targetCount)
 }
