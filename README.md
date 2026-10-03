@@ -34,6 +34,7 @@ See [Roadmap](#roadmap) for what's next.
   - [Test-result cache (local and distributed)](#test-result-cache-local-and-distributed)
   - [`fastci analyze`](#fastci-analyze)
   - [`fastci guard`](#fastci-guard)
+    - [Distinguishing a real finding from an infrastructure failure](#distinguishing-a-real-finding-from-an-infrastructure-failure)
     - [PipAudit (Python)](#pipaudit-python)
     - [LifecycleScripts (JS/TS)](#lifecyclescripts-jsts)
     - [CargoBuildScripts (Rust)](#cargobuildscripts-rust)
@@ -424,6 +425,106 @@ detection itself:
 | Python | [`pip-audit`](https://pypi.org/project/pip-audit/) | `pip install pip-audit` |
 | Rust | [`cargo-audit`](https://github.com/rustsec/rustsec) | `cargo install cargo-audit` |
 
+#### Distinguishing a real finding from an infrastructure failure
+
+**The problem** — every scanner above can fail to even complete its scan,
+most commonly from having no network access to fetch its own
+vulnerability/advisory database (a flaky connection, a firewalled CI
+runner, a dead proxy). Several of them - npm/pnpm/yarn audit, pip-audit,
+and cargo-audit - reuse the *exact same* exit code for that as they do for
+"the scan completed and found a real vulnerability." Treating any
+non-zero exit as a finding, the naive generic-Unix-tool assumption, would
+misreport an ordinary network hiccup as a real vulnerability - this was a
+genuine bug found in this project (by deliberately forcing every scanner
+to fail this way against the real tool, not just by reading their docs)
+and fixed per-tool, as described below.
+
+**How each tool is told apart**:
+
+- **govulncheck** doesn't need any text matching: its own docs reserve a
+  specific exit code, `3`, exclusively for "your code is affected by a
+  vulnerability it can actually reach." Exit `0` is clean; any other exit
+  code (most commonly `1`, from a database-fetch failure) is treated as
+  the tool failing to complete, never as a finding.
+- **npm, pnpm, and yarn audit** reuse the same exit code for both outcomes,
+  so fastci inspects the tool's own output text instead, looking for any
+  of: npm's `audit endpoint returned an error`; pnpm's
+  `ERR_PNPM_AUDIT_BAD_RESPONSE`; or, as a broader net covering all three
+  (yarn in particular has no distinct string of its own - its real failure
+  text is a generic connection-error dump) - a Node.js network error code
+  (`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, `ECONNRESET`) or the
+  plain-English OS errno text pnpm's own Rust-based HTTP client prints
+  instead (`Connection refused`, `Connection reset`, `Connection timed
+  out`).
+- **pip-audit** likewise reuses the same exit code; fastci recognizes an
+  unhandled Python traceback (`Traceback (most recent call last):`) or one
+  of pip-audit's own logged `ERROR:pip_audit.*` messages, neither of which
+  its real vulnerability-report format (a formatted table) could ever
+  produce.
+- **cargo-audit** also reuses the same exit code; fastci looks for its own
+  specific message, `couldn't fetch advisory database`.
+
+Every one of these markers was verified directly against the real tool,
+not inferred from documentation: by pointing `HTTP_PROXY`/`HTTPS_PROXY` at
+a port nothing listens on and running the real scanner against it, then
+capturing its actual failure text - the same empirical approach used
+throughout this project.
+
+**How it's reported** — each checker's `Run` has exactly three possible
+outcomes:
+
+| Outcome | What's printed | Counts as a "finding"? |
+| --- | --- | --- |
+| Real vulnerability found | the tool's own output, then `fastci: <name> reported issues (see above)` | yes - `guard` exits non-zero |
+| Clean scan, nothing found | `fastci: <name>: no issues found` | no |
+| Infrastructure failure | `fastci: <name>: could not complete - <reason>` | no - treated exactly like the tool not being installed at all ("couldn't check", not "checked and found a problem") |
+
+Two real, captured examples - the same project, with and without a live
+network connection:
+
+```
+$ HTTP_PROXY=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 fastci guard
+fastci: running govulncheck...
+fastci: govulncheck: could not complete - govulncheck: exited 1 without completing the scan (a usage error, or most commonly a failure to fetch its vulnerability database - not a vulnerability finding, which uses exit code 3 specifically):
+govulncheck: fetching vulnerabilities: Get "https://vuln.go.dev/index/modules.json.gz": proxyconnect tcp: dial tcp 127.0.0.1:1: connect: connection refused
+
+fastci: no vulnerabilities found by the scanners that ran, but at least one applicable scanner was skipped - see above
+```
+
+```
+$ fastci guard
+fastci: running govulncheck...
+=== Symbol Results ===
+
+Vulnerability #1: GO-2021-0113
+    Out-of-bounds read in golang.org/x/text/language
+  More info: https://pkg.go.dev/vuln/GO-2021-0113
+  Module: golang.org/x/text
+    Found in: golang.org/x/text@v0.3.0
+    Fixed in: golang.org/x/text@v0.3.7
+    Example traces found:
+      #1: main.go:6:23: m.main calls language.Parse
+
+Your code is affected by 1 vulnerability from 1 module.
+
+fastci: govulncheck reported issues (see above)
+
+fastci: one or more scanners reported vulnerabilities
+```
+
+A checker that "could not complete" never stops any other applicable
+checker in the same run from still executing - a monorepo with both a
+`go.mod` and a `package.json` still gets its npm audit run even if
+govulncheck's own database fetch failed. Each check also runs in its own
+process group with a bounded timeout, so a single scanner that hangs
+outright can't block the rest of `guard` either - see below.
+Across the whole `guard` run: any real finding makes it exit non-zero
+regardless of anything else; with no finding but at least one checker that
+couldn't complete or was skipped, it exits `0` but says so explicitly
+rather than silently reporting a clean bill of health; only when every
+applicable checker both ran and found nothing does it report a plain "no
+vulnerabilities found".
+
 #### PipAudit (Python)
 
 **Detection** — this check becomes applicable whenever the working
@@ -624,18 +725,14 @@ non-zero only when a check that did run reports something.
 
 Each scanner's own exit code is interpreted according to *that tool's*
 actual convention, not a generic "any non-zero exit means a finding"
-assumption - govulncheck reserves a specific exit code for a real finding
-and uses others (most commonly triggered by a failure to fetch its
-vulnerability database) for the tool itself failing; npm/pnpm/yarn audit,
-pip-audit, and cargo-audit all reuse the same exit code for both a real
-finding and a failure to reach their advisory data, distinguishable only
-by a message in their own output. Getting this wrong would misreport an
-ordinary network hiccup as a real vulnerability - a genuine false
-positive we found and fixed by deliberately forcing each scanner to fail
-this way in practice, not just by reading their docs. A check that fails
-this way is reported as "could not complete", the same as a missing
-binary, rather than as a finding, and - like a missing binary - never
-stops `guard` from still running every other applicable check.
+assumption - a check that fails to even complete its scan (most commonly a
+network problem fetching its vulnerability/advisory database) is reported
+as "could not complete", the same as a missing binary, rather than as a
+finding, and - like a missing binary - never stops `guard` from still
+running every other applicable check. See
+[Distinguishing a real finding from an infrastructure failure](#distinguishing-a-real-finding-from-an-infrastructure-failure)
+above for exactly how each tool is told apart, and for real, captured
+examples of both outcomes.
 
 Each check also runs in its own process group with a bounded timeout (a
 few minutes - generous for an ordinary scan, including a fresh advisory-
