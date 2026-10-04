@@ -12,7 +12,10 @@ out of the way otherwise. See [Benchmarks](docs/benchmarks/README.md) for
 real, reproducible measurements — including where it helps, where it
 doesn't, and the scripts to check both on your own hardware — and
 [fastci vs. Nx/Turborepo](docs/comparison.md) for how it differs from
-monorepo build orchestrators, and when each fits.
+monorepo build orchestrators, and when each fits. JS/TS monorepo users
+specifically: see
+[fastci and your JS/TS monorepo](docs/jsts-monorepo.md) for what
+workspace cross-package resolution does and a reproducible demo.
 
 ![fastci narrowing a one-file change to 3 of 43 Go test targets, explaining why one of them was selected with --why, and previewing a run with --dry-run](docs/demo.gif)
 
