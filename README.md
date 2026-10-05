@@ -377,8 +377,11 @@ additionally stops attempting the remote at all for the rest of the run
 after a few consecutive failed round trips, so a remote that's merely slow
 to fail (rather than refusing the connection outright) can't turn into a
 real multi-minute stall across a large target set, one 5-second timeout at
-a time. A remote hit is folded into the local cache file too, so a later
-run on the same machine doesn't pay for another round trip to see it
+a time - see
+[docs/remote-cache-circuit-breaker.md](docs/remote-cache-circuit-breaker.md)
+for exactly how that's decided and what it changes for you. A remote hit
+is folded into the local cache file too, so a later run on the same
+machine doesn't pay for another round trip to see it
 again.
 
 ### `fastci analyze`
