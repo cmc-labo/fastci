@@ -986,6 +986,12 @@ checkout does extra network I/O. If that fetch itself fails (no network, a
 `<ref>` that doesn't exist at all, permissions), fastci reports a clear
 error rather than a bare `git` failure.
 
+**Jenkins users**: fastci needs no plugin - it runs from a plain shell
+step in any job type. See [docs/jenkins.md](docs/jenkins.md) for a full
+setup guide: Declarative Pipeline and Freestyle examples, getting
+`--base` right for both regular and pull-request builds, shallow clones,
+and `fastci analyze`/`fastci guard` as their own stages.
+
 ## Current limitations
 
 **Go**
