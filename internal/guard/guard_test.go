@@ -140,3 +140,41 @@ func TestGoVulnCheckRunFailsCleanlyWithoutTheBinary(t *testing.T) {
 		t.Error("Run() with no govulncheck binary on PATH should return an error")
 	}
 }
+
+// TestDetectSwallowsStatErrorsConsistently reproduces a real
+// cross-checker inconsistency that existed before: a permission error
+// reading a manifest file (as opposed to it simply not existing) made
+// LifecycleScripts' and CargoBuildScripts' Detect return a real error,
+// while every other Checker's Detect swallowed any os.Stat error and
+// just reported "not applicable". That mattered because
+// cmd/fastci/guard.go treats a Detect error as fatal for the *entire*
+// guard run, aborting before any checker executes - so an ordinary
+// permission hiccup on one ecosystem's manifest could take down
+// detection for every other, unrelated ecosystem too, contradicting
+// this package's own design of every Checker being independent (see the
+// package doc). Every Checker must treat a Detect-time stat error the
+// same way: as "not applicable", never as a reportable error.
+func TestDetectSwallowsStatErrorsConsistently(t *testing.T) {
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restore permissions before TempDir's own cleanup tries to remove
+	// it - t.Cleanup runs LIFO, and TempDir registered its removal
+	// first, so this runs first during unwind.
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	for _, c := range guard.Checkers() {
+		ok, err := c.Detect(locked)
+		if err != nil {
+			t.Errorf("%s.Detect: got error %v, want nil - a permission error reading a manifest should mean \"not applicable\", not abort the whole guard run", c.Name(), err)
+		}
+		if ok {
+			t.Errorf("%s.Detect = true against an unreadable directory, want false", c.Name())
+		}
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -136,6 +137,32 @@ func isolateProcessGroup(cmd *exec.Cmd) {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = killGrace
+}
+
+// pluralize returns singular if n == 1, plural otherwise - used by
+// LifecycleScripts and CargoBuildScripts to build a grammatically
+// correct "N thing(s) verb(s) ..." report header.
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
+// formatHitsReport builds a Checker's standard "found N things" report: a
+// header sentence followed by one already-formatted line per hit - the
+// exact shape LifecycleScripts and CargoBuildScripts both produce for
+// their near-identical "list dependencies that can run code
+// automatically" findings. header should not have a trailing newline;
+// the result doesn't either.
+func formatHitsReport(header string, lines []string) string {
+	var b strings.Builder
+	b.WriteString(header)
+	for _, l := range lines {
+		b.WriteByte('\n')
+		b.WriteString(l)
+	}
+	return b.String()
 }
 
 // Checkers lists every built-in Checker, in a fixed, stable order.

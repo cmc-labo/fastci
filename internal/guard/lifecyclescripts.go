@@ -35,13 +35,7 @@ func (LifecycleScripts) Name() string { return "npm/pnpm/yarn lifecycle scripts"
 
 func (LifecycleScripts) Detect(dir string) (bool, error) {
 	_, err := os.Stat(filepath.Join(dir, "package.json"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return err == nil, nil
 }
 
 func (LifecycleScripts) BinaryAvailable(dir string) (bool, string) {
@@ -131,17 +125,13 @@ func (LifecycleScripts) Run(ctx context.Context, dir string) (Result, error) {
 	}
 
 	res.FoundIssues = true
-	verb := "define"
-	noun := "dependencies"
-	if len(hits) == 1 {
-		verb = "defines"
-		noun = "dependency"
+	noun := pluralize(len(hits), "dependency", "dependencies")
+	verb := pluralize(len(hits), "defines", "define")
+	header := fmt.Sprintf("%d installed %s %s an install-time lifecycle script - not necessarily malicious, but each one runs code automatically during install, so review any you don't recognize:", len(hits), noun, verb)
+	lines := make([]string, len(hits))
+	for i, h := range hits {
+		lines[i] = fmt.Sprintf("  %s@%s: %s", h.name, h.version, strings.Join(h.scripts, ", "))
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d installed %s %s an install-time lifecycle script - not necessarily malicious, but each one runs code automatically during install, so review any you don't recognize:\n", len(hits), noun, verb)
-	for _, h := range hits {
-		fmt.Fprintf(&b, "  %s@%s: %s\n", h.name, h.version, strings.Join(h.scripts, ", "))
-	}
-	res.Output = strings.TrimRight(b.String(), "\n")
+	res.Output = formatHitsReport(header, lines)
 	return res, nil
 }

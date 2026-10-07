@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // CargoBuildScripts flags dependency crates (direct or transitive) that
@@ -36,13 +35,7 @@ func (CargoBuildScripts) Name() string { return "cargo build scripts" }
 
 func (CargoBuildScripts) Detect(dir string) (bool, error) {
 	_, err := os.Stat(filepath.Join(dir, "Cargo.toml"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return err == nil, nil
 }
 
 func (CargoBuildScripts) BinaryAvailable(dir string) (bool, string) {
@@ -134,15 +127,13 @@ func (CargoBuildScripts) Run(ctx context.Context, dir string) (Result, error) {
 	})
 
 	res.FoundIssues = true
-	noun, verb := "dependency", "defines"
-	if len(hits) != 1 {
-		noun, verb = "dependencies", "define"
+	noun := pluralize(len(hits), "dependency", "dependencies")
+	verb := pluralize(len(hits), "defines", "define")
+	header := fmt.Sprintf("%d %s %s a custom build script - not necessarily malicious, but each one runs arbitrary code automatically at build time, so review any you don't recognize:", len(hits), noun, verb)
+	lines := make([]string, len(hits))
+	for i, h := range hits {
+		lines[i] = fmt.Sprintf("  %s@%s: %s", h.name, h.version, h.path)
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d %s %s a custom build script - not necessarily malicious, but each one runs arbitrary code automatically at build time, so review any you don't recognize:\n", len(hits), noun, verb)
-	for _, h := range hits {
-		fmt.Fprintf(&b, "  %s@%s: %s\n", h.name, h.version, h.path)
-	}
-	res.Output = strings.TrimRight(b.String(), "\n")
+	res.Output = formatHitsReport(header, lines)
 	return res, nil
 }
