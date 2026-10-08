@@ -135,6 +135,55 @@ on:
 	}
 }
 
+// TestDetectFASTCIBaseBranchEnvVarWinsOverEverything checks the
+// universal override's priority: it must win even when a GitHub Actions
+// workflow explicitly names a different branch, since it's the one
+// signal that's both more explicit (the user said so directly) and the
+// only one that works identically on a CI platform this package has no
+// dedicated parser for at all.
+func TestDetectFASTCIBaseBranchEnvVarWinsOverEverything(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "ci.yml", `
+on:
+  pull_request:
+    branches: [develop]
+`)
+	t.Setenv("FASTCI_BASE_BRANCH", "release/v2")
+
+	got, err := ciworkflow.Detect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branch != "release/v2" {
+		t.Errorf("Branch = %q, want %q (FASTCI_BASE_BRANCH should win over everything else)", got.Branch, "release/v2")
+	}
+	if got.Reason == "" {
+		t.Error("Reason is empty, want an explanation naming the environment variable")
+	}
+}
+
+func TestDetectFASTCIBaseBranchEnvVarIgnoredWhenBlank(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "trunk")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "f.txt")
+	runGit(t, dir, "commit", "-q", "-m", "init")
+
+	t.Setenv("FASTCI_BASE_BRANCH", "   ")
+
+	got, err := ciworkflow.Detect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branch != "main" {
+		t.Errorf("Branch = %q, want the hardcoded fallback %q (a blank/whitespace-only override should be treated as unset)", got.Branch, "main")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

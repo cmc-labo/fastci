@@ -826,30 +826,63 @@ passes through the proxy and so never appears in the report.
 
 Phase 3's other piece (see [Roadmap](#roadmap)): reproducing what CI would
 run, locally, without having to remember or hand-pick `--base`. `local`
-reads `.github/workflows/*.yml` for the base branch a pull request would be
-diffed against, then runs `fastci test` with that as `--base`:
+figures out the base branch a pull/merge request would be diffed against,
+then runs `fastci test` with that as `--base`:
 
 ```sh
 fastci local
 ```
 
-It looks for the base branch in this order:
+It tries each of the following in order, using the first that gives an
+answer:
 
-1. An explicit `on.pull_request.branches` in a workflow file.
-2. Failing that, the same workflow's `on.push.branches` - a bare
+1. The `FASTCI_BASE_BRANCH` environment variable, if set - a universal,
+   explicit override that works identically no matter which CI platform
+   (or none) is in play, including ones nothing below reads at all
+   (Jenkins, Bitbucket Pipelines, Azure DevOps, Travis, Buildkite, ...).
+2. An explicit `on.pull_request.branches` in a **GitHub Actions**
+   workflow file (`.github/workflows/*.yml`).
+3. Failing that, the same workflow's `on.push.branches` - a bare
    `pull_request:` trigger with no branches filter is common (GitHub
    already scopes it to the PR's own base branch, so there's often nothing
    to read there), and a repo's main integration branch is almost always
    both what pushes deploy from and what pull requests target.
-3. Failing that, the repository's actual default branch
-   (`refs/remotes/origin/HEAD`).
-4. As a last resort, `main`.
+4. Failing that, a branch literal named by a job's own `rules`/`only`
+   trigger in a **GitLab CI/CD** `.gitlab-ci.yml` (e.g. `rules: - if:
+   '$CI_COMMIT_BRANCH == "main"'`, or the legacy `only: [main]`). GitLab's
+   own config format has no equivalent of a merge request's target branch
+   at all - that's only available at pipeline runtime, which doesn't help
+   a local run - so this reads the same kind of signal as step 3 above: a
+   push/deploy trigger's branch, not a merge-request-specific one. A rule
+   gated on `$CI_DEFAULT_BRANCH` (a variable, not a literal) is skipped,
+   since it carries no information step 6 below doesn't already have.
+5. Failing that, a branch literal named by a job's own
+   `filters.branches.only` in a **CircleCI** `.circleci/config.yml` - same
+   reasoning as step 4 (CircleCI's config format has no pull-request
+   concept either), and a regex-style filter (`/release-.*/`) is skipped
+   the same way a GitLab variable reference is, since it names a pattern,
+   not one concrete branch.
+6. Failing all of the above, the repository's actual default branch
+   (`refs/remotes/origin/HEAD`) - this step alone is genuinely
+   platform-agnostic, unlike 2-5 above.
+7. As a last resort, `main`.
 
 ```
 $ fastci local
 fastci: reproducing CI locally against origin/main (no pull_request.branches filter found, inferred from on.push.branches in .github/workflows/ci.yml)
 fastci: 2 changed file(s):
   ...
+```
+
+Steps 2-5 only read the single top-level config file each platform
+conventionally uses - job templates split across other files (GitHub
+Actions reusable workflows, GitLab's `include:`) aren't followed. If your
+CI setup doesn't fit any of them (or you'd simply rather not rely on
+guesswork), `FASTCI_BASE_BRANCH` is the direct, zero-guesswork answer:
+
+```sh
+export FASTCI_BASE_BRANCH=main
+fastci local
 ```
 
 It accepts the same `--dry-run`, `--no-cache`, and `-- <flags>` passthrough

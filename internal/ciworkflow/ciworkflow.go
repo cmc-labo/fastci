@@ -1,7 +1,15 @@
-// Package ciworkflow inspects a repository's GitHub Actions workflow files
-// to figure out what base branch CI would diff a pull request against, so
-// that `fastci local` can reproduce the same impact analysis locally
-// instead of guessing (or requiring the user to pass --base by hand).
+// Package ciworkflow figures out what base branch CI would diff a pull
+// request against, so that `fastci local` can reproduce the same impact
+// analysis locally instead of guessing (or requiring the user to pass
+// --base by hand). GitHub Actions workflow files get the most precise
+// treatment, since their schema actually declares a pull request's target
+// branch; GitLab CI/CD and CircleCI configs get a best-effort reading of
+// whatever branch their own push/deploy triggers already name (see
+// gitlab.go/circleci.go for exactly why that's the best available signal
+// for either); and FASTCI_BASE_BRANCH is a universal override that works
+// identically regardless of CI platform - including ones this package has
+// no dedicated support for at all (Bitbucket Pipelines, Azure DevOps,
+// Travis, Buildkite, ...).
 package ciworkflow
 
 import (
@@ -44,25 +52,49 @@ type branchFilter struct {
 	Branches []string `yaml:"branches"`
 }
 
-// Detect looks at every workflow file under
-// <repoRoot>/.github/workflows/*.yml (and *.yaml) and returns the base
-// branch fastci should diff against to match CI.
+// baseBranchEnvVar is a universal, explicit override for Detect's own
+// guesswork: unlike every source below it, it works identically no
+// matter which CI platform (or none at all) is in play, and is the only
+// way to get a reliable answer on a platform this package has no
+// dedicated parser for.
+const baseBranchEnvVar = "FASTCI_BASE_BRANCH"
+
+// Detect figures out the base branch fastci should diff against to match
+// CI, trying each of the following in order and returning the first
+// match:
 //
-// It prefers, in order:
+//  0. The FASTCI_BASE_BRANCH environment variable, if set - see
+//     baseBranchEnvVar.
 //  1. The first explicit "on.pull_request.branches" entry found in any
-//     workflow file, sorted by filename for determinism across multiple
+//     GitHub Actions workflow file under .github/workflows/*.yml (or
+//     *.yaml), sorted by filename for determinism across multiple
 //     matching workflows.
-//  2. Failing that, the first explicit "on.push.branches" entry - a repo's
-//     main integration branch is almost always both what pushes deploy
-//     from and what pull requests target, and a bare "pull_request:"
-//     trigger (no branches filter at all) is extremely common precisely
-//     because GitHub already restricts it to the PR's own base branch, so
-//     the workflow file itself often has no branch name to read at all.
-//  3. Failing that (no workflows, or none mention a branch anywhere), the
-//     repository's actual default branch per
-//     "git symbolic-ref refs/remotes/origin/HEAD".
-//  4. As a last resort, the literal string "main".
+//  2. Failing that, the first explicit "on.push.branches" entry in any
+//     such workflow - a repo's main integration branch is almost always
+//     both what pushes deploy from and what pull requests target, and a
+//     bare "pull_request:" trigger (no branches filter at all) is
+//     extremely common precisely because GitHub already restricts it to
+//     the PR's own base branch, so the workflow file itself often has no
+//     branch name to read at all.
+//  3. Failing that, a branch literal named by a job's own rules/only
+//     trigger in a GitLab CI/CD .gitlab-ci.yml - see gitlab.go for why
+//     this is the best signal GitLab's own config format can give.
+//  4. Failing that, a branch literal named by a job's own
+//     filters.branches.only in a CircleCI .circleci/config.yml - see
+//     circleci.go for the same reasoning applied there.
+//  5. Failing all of the above (no recognized CI config, or none mention
+//     a branch anywhere), the repository's actual default branch per
+//     "git symbolic-ref refs/remotes/origin/HEAD" - this step alone is
+//     genuinely platform-agnostic, unlike 1-4 above.
+//  6. As a last resort, the literal string "main".
 func Detect(repoRoot string) (Detection, error) {
+	if branch := strings.TrimSpace(os.Getenv(baseBranchEnvVar)); branch != "" {
+		return Detection{
+			Branch: branch,
+			Reason: fmt.Sprintf("%s environment variable", baseBranchEnvVar),
+		}, nil
+	}
+
 	files, err := workflowFiles(repoRoot)
 	if err != nil {
 		return Detection{}, err
@@ -97,16 +129,30 @@ func Detect(repoRoot string) (Detection, error) {
 		}
 	}
 
+	if branch, ok := detectGitLab(repoRoot); ok {
+		return Detection{
+			Branch: branch,
+			Reason: fmt.Sprintf("no GitHub Actions workflow specifies a branch, inferred from a rules/only trigger in %s", gitlabCIFile),
+		}, nil
+	}
+
+	if branch, ok := detectCircleCI(repoRoot); ok {
+		return Detection{
+			Branch: branch,
+			Reason: fmt.Sprintf("no GitHub Actions or GitLab CI/CD config specifies a branch, inferred from a filters.branches.only trigger in %s", circleCIFile),
+		}, nil
+	}
+
 	if branch, ok := defaultRemoteBranch(repoRoot); ok {
 		return Detection{
 			Branch: branch,
-			Reason: "no workflow specifies a branch, using the repository's default branch (origin/HEAD)",
+			Reason: "no recognized CI config specifies a branch, using the repository's default branch (origin/HEAD)",
 		}, nil
 	}
 
 	return Detection{
 		Branch: "main",
-		Reason: `no workflow specifies a branch and the repository's default branch could not be determined, falling back to "main"`,
+		Reason: `no recognized CI config specifies a branch and the repository's default branch could not be determined, falling back to "main"`,
 	}, nil
 }
 

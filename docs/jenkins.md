@@ -92,36 +92,52 @@ detection in shell.
 
 ## Getting `--base` right: regular branches vs. pull requests
 
-Three options, in increasing order of how much Jenkins-specific wiring
-they need:
+Four options, in increasing order of how much Jenkins-specific wiring
+they need. Jenkins itself has no dedicated config-file detector in
+`fastci local` the way GitHub Actions, GitLab CI/CD, and CircleCI each
+do (there's no single canonical Jenkinsfile shape to read a target branch
+from the way those three have), so for most Jenkins setups option 1 is
+the right one to reach for first:
 
-1. **`fastci local`, no flags.** It inspects `.github/workflows/*.yml` for
-   the base branch GitHub Actions CI would use, and - this is the part
-   that matters even if you don't use GitHub Actions at all - **falls
+1. **`export FASTCI_BASE_BRANCH=main` (or whatever branch is right),
+   then `fastci local` or `fastci test` with no `--base` at all.** This is
+   a universal, explicit override - it works identically regardless of
+   job type, Multibranch or Freestyle, PR build or plain branch build -
+   and is the most direct way to get a reliable answer on a platform
+   `fastci local`'s own auto-detection has no dedicated support for.
+   Setting it from `$CHANGE_TARGET` when available (see option 3) and a
+   fixed fallback otherwise combines this with PR-awareness:
+   ```groovy
+   environment {
+       FASTCI_BASE_BRANCH = "${env.CHANGE_TARGET ?: 'main'}"
+   }
+   ```
+2. **`fastci local`, no flags, and no `FASTCI_BASE_BRANCH` set.** Falls
    back gracefully through your repository's actual default branch
-   (`refs/remotes/origin/HEAD`) and finally the literal string `"main"`**
-   if no workflow file exists. Verified directly: run it in a repo with
-   no `.github/workflows` directory at all, and it still correctly prints
+   (`refs/remotes/origin/HEAD`) and finally the literal string `"main"`
+   if no recognized CI config file exists at all. Verified directly: run
+   it in a repo with none of `.github/workflows`, `.gitlab-ci.yml`, or
+   `.circleci/config.yml` present, and it still correctly prints
    something like `fastci: reproducing CI locally against origin/main
-   (no workflow specifies a branch and the repository's default branch
-   could not be determined, falling back to "main")` and proceeds. This
-   is the simplest option for an ordinary branch build, but it depends on
-   `origin/HEAD` actually being set on the agent's checkout to resolve
-   anything better than the literal `"main"` fallback - a plain `git
-   clone` sets this automatically; a checkout assembled by hand (`git
-   init` + `git remote add` + `git fetch`, as some custom Jenkins
-   SCM setups do) does not, and needs `git remote set-head origin -a` to
-   get the same benefit.
-2. **`fastci test --base origin/$CHANGE_TARGET`**, for a Multibranch
+   (no recognized CI config specifies a branch and the repository's
+   default branch could not be determined, falling back to "main")` and
+   proceeds. This depends on `origin/HEAD` actually being set on the
+   agent's checkout to resolve anything better than the literal `"main"`
+   fallback - a plain `git clone` sets this automatically; a checkout
+   assembled by hand (`git init` + `git remote add` + `git fetch`, as
+   some custom Jenkins SCM setups do) does not, and needs `git remote
+   set-head origin -a` to get the same benefit.
+3. **`fastci test --base origin/$CHANGE_TARGET`**, for a Multibranch
    Pipeline building a pull/merge request (see the Declarative Pipeline
-   example above) - the most precise option, since it's reading the
-   actual PR target Jenkins itself resolved, not guessing.
-3. **`fastci test --base origin/<branch>`** with the branch name hard-coded
+   example above) - reads the actual PR target Jenkins itself resolved,
+   not a guess, without needing to set any environment variable first.
+4. **`fastci test --base origin/<branch>`** with the branch name hard-coded
    or computed however your own Jenkinsfile already determines it, for
    any other setup.
 
-All three ultimately just set fastci's own `--base`; none of this is
-fastci-specific plumbing beyond picking which ref string to pass.
+All four ultimately just set fastci's own `--base`, one way or another;
+none of this is fastci-specific plumbing beyond picking which ref string
+to pass.
 
 ## Shallow clones
 
