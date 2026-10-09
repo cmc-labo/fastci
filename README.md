@@ -26,6 +26,7 @@ This is an early, incrementally-developed project. Today it covers:
 - **TypeScript/JavaScript with Jest** — file-level
 - **Python with pytest** — file-level
 - **Rust with Cargo** — crate-level, single crate or [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
+- **Java with Maven or Gradle** — file-level, single-module projects (see [Current limitations](#current-limitations))
 
 See [Roadmap](#roadmap) for what's next.
 
@@ -135,12 +136,13 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
 
 1. `fastci test` auto-detects the project type in the working directory
    (Go module/workspace, a Vitest-configured project, a Jest-configured
-   `package.json`, a pytest-configured Python project, or a Rust
-   crate/Cargo workspace) and resolves the files changed in your working
-   tree (or, with `--base`, the files changed between a base ref and
-   `HEAD`).
+   `package.json`, a pytest-configured Python project, a Rust
+   crate/Cargo workspace, or a Maven/Gradle Java project) and resolves the
+   files changed in your working tree (or, with `--base`, the files
+   changed between a base ref and `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
-   regex/string matching over import statements:
+   regex/string matching over import statements — **except for Java**,
+   covered last below, which is the one deliberate exception:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
      (backed by `go list`), which resolves module paths, `internal/`
      visibility, `replace` directives, and `go.work` workspaces exactly the
@@ -173,6 +175,14 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
      which resolves the real crate dependency graph (path dependencies,
      normal/dev/build dependencies) the same way `cargo build`/`cargo test`
      would.
+   - **Java is the exception**: there's no equivalent of `go/packages` or
+     `cargo metadata` available without the project already being
+     compiled first (javac/jdeps need class files, not source), which
+     every other analyzer above specifically avoids requiring. Instead,
+     each `.java` file's `package`/`import` declarations and identifier
+     tokens are read with a plain regexp scan - see
+     [Current limitations](#current-limitations) for exactly what this
+     does and doesn't catch.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -195,8 +205,9 @@ Run from the project root — a Go module (`go.mod`), a Go workspace
 (`go.work`), a Vitest project (`vitest.config.*` or a `vitest` dependency),
 a Jest project (`package.json` with Jest configured), a pytest project
 (`pytest.ini`, `conftest.py`, or a
-`[tool.pytest.ini_options]`/`[tool:pytest]` section), or a Rust crate or
-Cargo workspace (`Cargo.toml`):
+`[tool.pytest.ini_options]`/`[tool:pytest]` section), a Rust crate or
+Cargo workspace (`Cargo.toml`), or a single-module Maven (`pom.xml`) or
+Gradle (`build.gradle`/`build.gradle.kts`) Java project:
 
 ```sh
 # Test whatever's affected by your uncommitted changes
@@ -294,6 +305,20 @@ fastci: selected 3/4 test target(s) (cargo, 25% skipped)
     consumer
   * leaf
     mid
+fastci: dry-run, not executing tests
+```
+
+Example output (Maven/JUnit, a same-package reference that needs no
+`import` at all - see [Current limitations](#current-limitations) for
+how Java resolution works):
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  src/main/java/com/example/Calc.java
+fastci: selected 2/3 test target(s) (java, 33% skipped)
+    src/test/java/com/example/CalcTest.java
+    src/test/java/com/example/FormatterTest.java
 fastci: dry-run, not executing tests
 ```
 
@@ -1004,6 +1029,12 @@ jobs:
       # Cargo projects: actions-rs or dtolnay/rust-toolchain, or nothing
       # if the runner image already ships a toolchain.
 
+      # Java (Maven/Gradle) projects
+      # - uses: actions/setup-java@v4
+      #   with:
+      #     distribution: temurin
+      #     java-version: "21"
+
       - run: go install github.com/hpscript/fastci/cmd/fastci@latest
       - run: fastci test --base origin/${{ github.base_ref }}
 ```
@@ -1187,6 +1218,56 @@ and `fastci analyze`/`fastci guard` as their own stages.
   `cargo metadata`, which (like `go list`) may need network access the
   first time it resolves a new dependency.
 
+**Java (Maven/Gradle)**
+
+This is the newest, deliberately simplest analyzer, and the one exception
+to "real language tooling" above - see [How it works](#how-it-works) for
+why. Treat it as a genuinely useful starting point, not yet at the same
+maturity as the others.
+
+- **Single-module projects only.** A multi-module Maven build (a parent
+  `pom.xml` with `<modules>`) or a multi-project Gradle build
+  (`settings.gradle`'s `include(...)`) isn't specifically understood yet -
+  only the root manifest is checked, and `fastci test`/`mvn
+  test`/`gradle test` run against the whole root project as one unit, the
+  same as before this analyzer existed. A single-module project (by far
+  the most common for a small-to-medium Java codebase) is fully supported.
+- **Import resolution is a plain regexp scan**, not a real parser and not
+  javac/jdeps - building the graph needs nothing beyond the source tree
+  itself (no `mvn`/`gradle` on `PATH`, no prior compile step), but trades
+  away some precision:
+  - Every file is assumed to declare exactly one top-level type whose name
+    matches its filename, true for the overwhelming majority of real Java
+    code; a file with more than one top-level type only has the
+    filename-matching one tracked.
+  - A same-package reference (needs no `import` at all in real Java - a
+    test class is routinely written in the very same package as the class
+    it tests, specifically to reach package-private members) and a
+    wildcard import (`import a.b.*;`) are both resolved by checking
+    whether the referenced class's simple name appears anywhere among the
+    file's own identifier tokens - real Java has no import-renaming
+    syntax, so a genuine reference always includes that literal name
+    somewhere in the file. This can occasionally be a false positive (a
+    coincidentally-named comment, string, or local variable), which only
+    ever costs an unnecessary extra test run, never a missed one.
+  - A single-type import that doesn't match anything in the project (the
+    JDK, a third-party library) is treated as external and ignored, the
+    same as a `node_modules` import for Jest/Vitest.
+- Test-file discovery uses the same conventions Maven Surefire and
+  Gradle's own default JUnit discovery both document: `Test*.java`,
+  `*Test.java`, `*Tests.java`, `*TestCase.java`. A custom test-file naming
+  convention isn't honored yet - such a project still works, but
+  test-file classification falls back to these defaults.
+- `pom.xml`, `build.gradle(.kts)`, `settings.gradle(.kts)`, and
+  `gradle.properties` changing all force a full run, since dependency and
+  plugin changes can ripple in ways the import graph alone doesn't
+  capture.
+- Running tests prefers a committed wrapper script (`mvnw`/`gradlew`) over
+  a global `mvn`/`gradle` install, the same reproducible-build convention
+  real Maven/Gradle projects already widely use; targets are selected by
+  simple class name (`mvn test -Dtest=Foo,Bar` / `gradle test --tests Foo
+  --tests Bar`).
+
 ## Troubleshooting
 
 **`command not found: fastci` after `go install`**
@@ -1269,18 +1350,21 @@ This tracks the phased plan in the project design doc:
   `--network-report` runtime guardrail on
   `fastci test`/`fastci local` that reports which hosts a run contacted —
   see [`fastci guard`](#fastci-guard) above. `fastci local` is implemented
-  for its core scope — auto-detecting CI's diff base branch from
-  `.github/workflows/*.yml` and running `fastci test` against it locally —
-  see [`fastci local`](#fastci-local) above; faithfully replaying a
-  workflow's other steps (e.g. its `uses:` actions) is out of scope for
-  this. This closes out every item originally planned for Phase 3.
+  for its core scope — auto-detecting CI's diff base branch (from a
+  GitHub Actions/GitLab CI/CircleCI config, a universal
+  `FASTCI_BASE_BRANCH` override, or the repository's own default branch —
+  see [`fastci local`](#fastci-local)) and running `fastci test` against
+  it locally; faithfully replaying a workflow's other steps (e.g. its
+  `uses:` actions) is out of scope for this. This closes out every item
+  originally planned for Phase 3.
 
 Language coverage grows incrementally alongside this. Vite `resolve.alias`
-resolution, Vitest/Jest monorepo/workspace cross-package resolution, and
+resolution, Vitest/Jest monorepo/workspace cross-package resolution,
 function-level impact analysis (Go only for now — see
-[Function-level impact analysis (Go)](#function-level-impact-analysis-go))
-are all implemented — see [Current limitations](#current-limitations)
-above. Extending function-level analysis to Jest/Vitest/pytest is not
+[Function-level impact analysis (Go)](#function-level-impact-analysis-go)),
+and an initial Java (Maven/Gradle) analyzer are all implemented — see
+[Current limitations](#current-limitations) above for exactly how mature
+each is. Extending function-level analysis to Jest/Vitest/pytest is not
 planned in the near term: unlike Go, a sound static call graph for
 dynamically-typed JS/TS or Python would have a real, material false-
 negative risk (missing a test that should run) from ordinary, common

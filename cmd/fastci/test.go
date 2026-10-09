@@ -11,6 +11,7 @@ import (
 	"github.com/hpscript/fastci/internal/analyzer"
 	"github.com/hpscript/fastci/internal/analyzer/cargoanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
+	"github.com/hpscript/fastci/internal/analyzer/javaanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
 	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
@@ -34,6 +35,7 @@ func candidateAnalyzers() []analyzer.Analyzer {
 		jestanalyzer.New(),
 		pytestanalyzer.New(),
 		cargoanalyzer.New(),
+		javaanalyzer.New(),
 	}
 }
 
