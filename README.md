@@ -26,7 +26,7 @@ This is an early, incrementally-developed project. Today it covers:
 - **TypeScript/JavaScript with Jest** — file-level
 - **Python with pytest** — file-level
 - **Rust with Cargo** — crate-level, single crate or [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
-- **Java with Maven or Gradle** — file-level, single-module projects (see [Current limitations](#current-limitations))
+- **Java with Maven or Gradle** — file-level, single- or multi-module (see [Current limitations](#current-limitations))
 
 See [Roadmap](#roadmap) for what's next.
 
@@ -1225,13 +1225,36 @@ to "real language tooling" above - see [How it works](#how-it-works) for
 why. Treat it as a genuinely useful starting point, not yet at the same
 maturity as the others.
 
-- **Single-module projects only.** A multi-module Maven build (a parent
-  `pom.xml` with `<modules>`) or a multi-project Gradle build
-  (`settings.gradle`'s `include(...)`) isn't specifically understood yet -
-  only the root manifest is checked, and `fastci test`/`mvn
-  test`/`gradle test` run against the whole root project as one unit, the
-  same as before this analyzer existed. A single-module project (by far
-  the most common for a small-to-medium Java codebase) is fully supported.
+- **Multi-module Maven builds** (a parent `pom.xml` with `<modules>`) **and
+  multi-project Gradle builds** (`settings.gradle`'s `include(...)`) **are
+  supported** - run `fastci test` from the aggregator/parent root, same as
+  any other analyzer's project-root convention. A cross-module import
+  (one module's class imported by another via its Maven/Gradle
+  coordinates) is tracked exactly like any other import - see
+  [How it works](#how-it-works). Two real build-tool behaviors needed a
+  specific workaround to make a *partial* module selection actually run,
+  rather than just the trivial "every module has at least one selected
+  test" case:
+  - Both Maven Surefire and Gradle's own default behavior is to **fail
+    the entire build** the moment a test-class filter matches zero
+    classes in some module/subproject's own test task - which is exactly
+    what happens, by design, in every module that isn't part of a given
+    selection. fastci passes Maven `-DfailIfNoTests=false`, and injects a
+    Gradle `--init-script` disabling `failOnNoMatchingTests` for every
+    `Test` task, so a module with nothing selected is cleanly skipped
+    instead of failing everything after it.
+  - Targets are selected by **fully-qualified class name**
+    (`mvn test -Dtest=com.example.a.Foo,com.example.b.Bar` / `gradle test
+    --tests com.example.a.Foo --tests com.example.b.Bar`), not simple
+    name - two different modules can easily share a simple class name,
+    and Gradle's own `--tests` matching isn't reliably simple-name-aware
+    without a wildcard.
+  - Not yet done: fastci doesn't restrict the build-tool invocation itself
+    to just the affected modules (Maven's own `-pl <module> -am`, say) -
+    every module in the reactor/build still gets processed (compiled),
+    even ones with nothing selected to actually test. Selection is still
+    fully correct either way; this is a performance opportunity, not a
+    correctness gap.
 - **Import resolution is a plain regexp scan**, not a real parser and not
   javac/jdeps - building the graph needs nothing beyond the source tree
   itself (no `mvn`/`gradle` on `PATH`, no prior compile step), but trades
@@ -1264,9 +1287,7 @@ maturity as the others.
   capture.
 - Running tests prefers a committed wrapper script (`mvnw`/`gradlew`) over
   a global `mvn`/`gradle` install, the same reproducible-build convention
-  real Maven/Gradle projects already widely use; targets are selected by
-  simple class name (`mvn test -Dtest=Foo,Bar` / `gradle test --tests Foo
-  --tests Bar`).
+  real Maven/Gradle projects already widely use.
 
 ## Troubleshooting
 
