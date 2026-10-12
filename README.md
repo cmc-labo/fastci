@@ -1297,6 +1297,34 @@ maturity as the others.
 `export PATH="$PATH:$(go env GOPATH)/bin"` — see
 [Quickstart](#quickstart).
 
+**Something's slow, hangs, or fails in a way the error message doesn't
+explain**
+Set `FASTCI_DEBUG=1` before trying again. This is a separate, lower-level
+mechanism from `-v`/`--verbose`: `-v` explains impact analysis's own
+reasoning (which files changed, why a target was or wasn't selected);
+`FASTCI_DEBUG` instead traces every subprocess fastci runs along the way -
+`git`, `go list` (via `go/packages`' own internal tracing), `cargo
+metadata`, the actual test runner, every `fastci guard` scanner, and so
+on - printing each one's exact command line, working directory, and how
+long it took:
+
+```
+$ FASTCI_DEBUG=1 fastci test --dry-run
+fastci: [debug] gitdiff: running [git rev-parse --show-toplevel] in "/path/to/repo"
+fastci: [debug] gitdiff: finished in 15.9ms
+fastci: [debug] gitdiff: running [git diff --name-only HEAD] in "/path/to/repo"
+fastci: [debug] gitdiff: finished in 12.5ms
+fastci: [debug] starting GOROOT= GOPATH= ... go list -e -json=... -- ./...
+fastci: [debug] 166.6ms for GOROOT= GOPATH= ... go list -e -json=... -- ./...
+fastci: selected 1/1 test target(s) (go, 0% skipped)
+```
+
+This is the first thing worth checking for any "why is this doing that"
+question this page doesn't already answer directly - seeing the exact
+command fastci ran (and against which directory) is usually the fastest
+way to tell a real fastci bug apart from the underlying tool just
+behaving the way it actually behaves in your project.
+
 **`fastci: no supported project detected in <dir>`**
 fastci auto-detects the project type by looking for one of: a Go
 `go.mod`/`go.work`, a Vitest config or `vitest` dependency, a

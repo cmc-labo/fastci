@@ -24,6 +24,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // Result is the outcome of running one Checker.
@@ -103,7 +105,9 @@ func runCmd(ctx context.Context, name, dir string, argv []string, extraEnv []str
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 
+	done := debug.Command(name, argv, dir)
 	runErr := cmd.Run()
+	done()
 	output = buf.String()
 	if runErr == nil {
 		return output, 0, nil

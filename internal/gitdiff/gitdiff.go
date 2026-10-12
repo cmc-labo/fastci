@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // ChangedFiles returns the list of files changed, as absolute paths.
@@ -129,7 +131,10 @@ func runGit(dir string, args ...string) ([]string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	done := debug.Command("gitdiff", cmd.Args, dir)
+	err := cmd.Run()
+	done()
+	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return nil, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, msg)
 		}

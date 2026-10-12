@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -100,7 +101,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 	defer cleanup()
 
 	cmd := exec.Command(py, scriptPath, dir)
+	done := debug.Command("pytestanalyzer", cmd.Args, dir)
 	out, err := cmd.Output()
+	done()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {

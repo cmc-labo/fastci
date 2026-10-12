@@ -119,7 +119,7 @@ type testOpts struct {
 func runTest(cmd *cobra.Command, opts testOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting the current directory: %w", err)
 	}
 
 	a, err := analyzer.Detect(cwd, candidateAnalyzers())
@@ -149,7 +149,7 @@ func runTest(cmd *cobra.Command, opts testOpts) error {
 		}
 		allTargets, err := a.AllTargets(cwd)
 		if err != nil {
-			return err
+			return fmt.Errorf("listing all targets: %w", err)
 		}
 		return runAndRecordWithNetworkReport(cmd.Context(), repoRoot, a, cwd, allTargets, opts)
 	}

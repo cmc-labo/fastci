@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // CargoBuildScripts flags dependency crates (direct or transitive) that
@@ -76,7 +78,9 @@ func (CargoBuildScripts) Run(ctx context.Context, dir string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "cargo", "metadata", "--format-version=1")
 	cmd.Dir = dir
 	isolateProcessGroup(cmd)
+	done := debug.Command("cargo build scripts", cmd.Args, dir)
 	stdout, err := cmd.Output()
+	done()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return Result{}, fmt.Errorf("cargo metadata: %w\n%s", err, exitErr.Stderr)

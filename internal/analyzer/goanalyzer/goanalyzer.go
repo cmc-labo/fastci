@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -59,6 +60,12 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 			packages.NeedDeps | packages.NeedModule,
 		Dir:   dir,
 		Tests: true,
+	}
+	if debug.Enabled() {
+		// go/packages' own Logf traces every underlying `go list`
+		// invocation it makes (there can be more than one) - exactly the
+		// kind of detail worth seeing under FASTCI_DEBUG, for free.
+		cfg.Logf = func(format string, args ...any) { debug.Logf(format, args...) }
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -184,7 +191,10 @@ func workspaceModuleDirs(dir string) ([]string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	done := debug.Command("goanalyzer", cmd.Args, dir)
+	err = cmd.Run()
+	done()
+	if err != nil {
 		return nil, fmt.Errorf("goanalyzer: listing workspace modules: %w%s", err, stderrSuffix(stderr.String()))
 	}
 
@@ -215,7 +225,10 @@ func goEnv(dir, key string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	done := debug.Command("goanalyzer", cmd.Args, dir)
+	err := cmd.Run()
+	done()
+	if err != nil {
 		return "", fmt.Errorf("goanalyzer: go env %s: %w%s", key, err, stderrSuffix(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil

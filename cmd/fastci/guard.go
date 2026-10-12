@@ -50,7 +50,7 @@ that's reported, but doesn't by itself make guard exit non-zero, since it's
 func runGuard(cmd *cobra.Command) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting the current directory: %w", err)
 	}
 
 	var applicable []guard.Checker

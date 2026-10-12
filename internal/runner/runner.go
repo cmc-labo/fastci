@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // Options configures a test run.
@@ -65,7 +67,10 @@ func Run(ctx context.Context, opts Options) error {
 		cmd.WaitDelay = killGrace
 	}
 
-	return cmd.Run()
+	done := debug.Command("runner", opts.Argv, opts.Dir)
+	err := cmd.Run()
+	done()
+	return err
 }
 
 // IsTerminal reports whether f is connected to a controlling terminal.

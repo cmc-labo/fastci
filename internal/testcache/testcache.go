@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -171,7 +172,7 @@ func (c *Cache) Save() error {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
-		return err
+		return fmt.Errorf("creating %s: %w", filepath.Dir(c.path), err)
 	}
 	gitignore := filepath.Join(filepath.Dir(c.path), ".gitignore")
 	if _, err := os.Stat(gitignore); os.IsNotExist(err) {
@@ -179,22 +180,25 @@ func (c *Cache) Save() error {
 	}
 	data, err := json.Marshal(c.entries)
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding cache entries: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(c.path), "test-results-*.json")
 	if err != nil {
-		return err
+		return fmt.Errorf("creating a temp file next to %s: %w", c.path, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
-		return err
+		return fmt.Errorf("writing %s: %w", tmp.Name(), err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return fmt.Errorf("closing %s: %w", tmp.Name(), err)
 	}
-	return os.Rename(tmp.Name(), c.path)
+	if err := os.Rename(tmp.Name(), c.path); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmp.Name(), c.path, err)
+	}
+	return nil
 }
 
 // cacheKey computes target's cache key from analyzerName, extraArgs, and a

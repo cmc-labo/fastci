@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // Detection is the result of inspecting a repository for its CI base
@@ -206,7 +208,9 @@ func relPath(repoRoot, path string) string {
 func defaultRemoteBranch(repoRoot string) (string, bool) {
 	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
 	cmd.Dir = repoRoot
+	done := debug.Command("ciworkflow", cmd.Args, repoRoot)
 	out, err := cmd.Output()
+	done()
 	if err != nil {
 		return "", false
 	}

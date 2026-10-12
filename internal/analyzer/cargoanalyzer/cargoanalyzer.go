@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -182,7 +183,9 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 func loadMetadata(dir string) (*cargoMetadata, error) {
 	cmd := exec.Command("cargo", "metadata", "--format-version=1")
 	cmd.Dir = dir
+	done := debug.Command("cargoanalyzer", cmd.Args, dir)
 	out, err := cmd.Output()
+	done()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {

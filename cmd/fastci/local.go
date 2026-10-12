@@ -45,7 +45,7 @@ same as "fastci test".`,
 func runLocal(cmd *cobra.Command, opts testOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting the current directory: %w", err)
 	}
 
 	repoRoot, err := gitdiff.RepoRoot(cwd)

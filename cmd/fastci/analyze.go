@@ -56,7 +56,7 @@ type analyzeOpts struct {
 func runAnalyze(cmd *cobra.Command, opts analyzeOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting the current directory: %w", err)
 	}
 	repoRoot, err := gitdiff.RepoRoot(cwd)
 	if err != nil {
@@ -69,7 +69,7 @@ func runAnalyze(cmd *cobra.Command, opts analyzeOpts) error {
 			fmt.Println("fastci: no recent test failure to analyze (the last `fastci test` run passed, or none has been run yet)")
 			return nil
 		}
-		return err
+		return fmt.Errorf("reading the last failure log: %w", err)
 	}
 
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -82,7 +82,7 @@ func runAnalyze(cmd *cobra.Command, opts analyzeOpts) error {
 	client := &anthropic.Client{APIKey: apiKey, Model: opts.model, BaseURL: os.Getenv("ANTHROPIC_BASE_URL")}
 	answer, err := client.CreateMessage(cmd.Context(), analyzeSystemPrompt, buildAnalyzePrompt(rec), opts.maxTokens)
 	if err != nil {
-		return err
+		return fmt.Errorf("asking %s: %w", opts.model, err)
 	}
 
 	fmt.Println()

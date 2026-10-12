@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/netmonitor"
 )
 
@@ -23,7 +24,11 @@ func runAndRecordWithNetworkReport(ctx context.Context, repoRoot string, a analy
 	if err != nil {
 		return fmt.Errorf("starting network monitor: %w", err)
 	}
-	defer proxy.Close()
+	defer func() {
+		if err := proxy.Close(); err != nil {
+			debug.Logf("closing network monitor: %v", err)
+		}
+	}()
 
 	restore := setProxyEnv(proxy.Addr())
 	defer restore()

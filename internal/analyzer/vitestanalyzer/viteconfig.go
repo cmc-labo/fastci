@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/evanw/esbuild/pkg/api"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 //go:embed extract_vite_aliases.js
@@ -129,7 +131,10 @@ func resolveViteAliases(dir string) map[string]string {
 		return nil
 	}
 
-	out, err := exec.Command(node, scriptPath, bundlePath, configPath).Output()
+	cmd := exec.Command(node, scriptPath, bundlePath, configPath)
+	done := debug.Command("vitestanalyzer", cmd.Args, dir)
+	out, err := cmd.Output()
+	done()
 	if err != nil {
 		return nil
 	}
