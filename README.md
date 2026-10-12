@@ -141,8 +141,7 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
    files changed in your working tree (or, with `--base`, the files
    changed between a base ref and `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
-   regex/string matching over import statements — **except for Java**,
-   covered last below, which is the one deliberate exception:
+   regex/string matching over import statements:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
      (backed by `go list`), which resolves module paths, `internal/`
      visibility, `replace` directives, and `go.work` workspaces exactly the
@@ -175,14 +174,17 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
      which resolves the real crate dependency graph (path dependencies,
      normal/dev/build dependencies) the same way `cargo build`/`cargo test`
      would.
-   - **Java is the exception**: there's no equivalent of `go/packages` or
-     `cargo metadata` available without the project already being
-     compiled first (javac/jdeps need class files, not source), which
-     every other analyzer above specifically avoids requiring. Instead,
-     each `.java` file's `package`/`import` declarations and identifier
-     tokens are read with a plain regexp scan - see
-     [Current limitations](#current-limitations) for exactly what this
-     does and doesn't catch.
+   - Java: the JDK's own compiler frontend (`com.sun.source.*`, the same
+     Compiler Tree API javac itself parses with), run via a small shim
+     embedded in fastci, in parse-only mode - never `.analyze()`, so
+     unlike `jdeps` (which can only inspect already-compiled `.class`/JAR
+     files) this needs nothing beyond the source tree itself: no
+     classpath, no dependency resolution, no successful compile, the same
+     guarantee every analyzer above keeps. It does need a `java` binary on
+     PATH, which in practice is never a new requirement - anything that
+     can run `mvn test`/`gradle test` at all already has a JDK installed.
+     See [Current limitations](#current-limitations) for exactly what a
+     parse-only pass still can't resolve, and why.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -1220,10 +1222,12 @@ and `fastci analyze`/`fastci guard` as their own stages.
 
 **Java (Maven/Gradle)**
 
-This is the newest, deliberately simplest analyzer, and the one exception
-to "real language tooling" above - see [How it works](#how-it-works) for
-why. Treat it as a genuinely useful starting point, not yet at the same
-maturity as the others.
+This is the newest analyzer. Import resolution uses the JDK's own
+Compiler Tree API in parse-only mode (see [How it works](#how-it-works)) -
+real tooling, same as every other language above - but it's still the
+least mature of the bunch, and the one that needs a `java` binary on
+PATH to build the graph at all (every other analyzer only needs that
+language's own toolchain at *test-run* time, not graph-build time).
 
 - **Multi-module Maven builds** (a parent `pom.xml` with `<modules>`) **and
   multi-project Gradle builds** (`settings.gradle`'s `include(...)`) **are
@@ -1255,27 +1259,31 @@ maturity as the others.
     even ones with nothing selected to actually test. Selection is still
     fully correct either way; this is a performance opportunity, not a
     correctness gap.
-- **Import resolution is a plain regexp scan**, not a real parser and not
-  javac/jdeps - building the graph needs nothing beyond the source tree
-  itself (no `mvn`/`gradle` on `PATH`, no prior compile step), but trades
-  away some precision:
-  - Every file is assumed to declare exactly one top-level type whose name
-    matches its filename, true for the overwhelming majority of real Java
-    code; a file with more than one top-level type only has the
-    filename-matching one tracked.
+- **Import resolution is a real parse** (the JDK's own Compiler Tree API,
+  parse-only - see [How it works](#how-it-works)), not jdeps and not a
+  regexp scan, but a parse-only pass still can't do everything full
+  semantic resolution against a complete classpath could:
   - A same-package reference (needs no `import` at all in real Java - a
     test class is routinely written in the very same package as the class
     it tests, specifically to reach package-private members) and a
-    wildcard import (`import a.b.*;`) are both resolved by checking
-    whether the referenced class's simple name appears anywhere among the
-    file's own identifier tokens - real Java has no import-renaming
-    syntax, so a genuine reference always includes that literal name
-    somewhere in the file. This can occasionally be a false positive (a
-    coincidentally-named comment, string, or local variable), which only
-    ever costs an unnecessary extra test run, never a missed one.
-  - A single-type import that doesn't match anything in the project (the
-    JDK, a third-party library) is treated as external and ignored, the
-    same as a `node_modules` import for Jest/Vitest.
+    plain, non-static wildcard import (`import a.b.*;`) are both resolved
+    by checking whether the referenced class's simple name appears
+    anywhere among the real identifier tokens the parser found in the
+    file's actual code - not its comments or string literals, unlike a
+    text-based scan, but still a token check rather than true symbol
+    resolution. Real Java has no import-renaming syntax, so a genuine
+    reference always includes that literal name somewhere in the file -
+    an occasional false positive (a coincidentally-named local variable
+    or field) only ever costs an unnecessary extra test run, never a
+    missed one.
+  - A single-type import (or a static member/wildcard import - both
+    resolved to the one type they actually name) that doesn't match
+    anything in the project (the JDK, a third-party library) is treated
+    as external and ignored, the same as a `node_modules` import for
+    Jest/Vitest.
+  - A file declaring more than one top-level type (unusual, but legal
+    Java) is handled correctly - every top-level type a file declares is
+    registered, not just one matching the filename.
 - Test-file discovery uses the same conventions Maven Surefire and
   Gradle's own default JUnit discovery both document: `Test*.java`,
   `*Test.java`, `*Tests.java`, `*TestCase.java`. A custom test-file naming

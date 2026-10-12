@@ -24,47 +24,53 @@
 // share a simple class name, and Gradle's own --tests matching isn't
 // reliably simple-name-aware without one.
 //
-// Import resolution is a deliberately simple, regexp-based text scan over
-// each .java file's own "package"/"import" declarations and identifier
-// tokens - not a real parser, and not javac/jdeps (which would need the
-// project already compiled first, unlike every other fastci analyzer).
-// This trades some precision for needing nothing beyond the source tree
-// itself:
+// Import resolution delegates to the real language tooling, the same
+// "don't reimplement what the toolchain already does" approach as
+// go/packages for Go or cargo metadata for Rust: FastciJavaParse.java, a
+// small shim embedded in this package, uses the JDK's own Compiler Tree
+// API (com.sun.source.*, javac's own frontend parser) in parse-only mode
+// (JavacTask.parse(), never .analyze()) - the same real-tool delegation
+// pytestanalyzer already uses its own embedded resolve_imports.py for.
+// "Parse-only" is the key property: unlike jdeps (which can only analyze
+// already-compiled .class/JAR files), this needs nothing beyond the
+// source tree itself - no classpath, no dependency resolution, no
+// successful compile - preserving the same "never requires the project
+// already built" guarantee every other fastci analyzer maintains. It
+// does need a `java` binary on PATH, which in practice is never a new
+// requirement: anything that can run `mvn test`/`gradle test` at all
+// already has a JDK installed, since Maven and Gradle are themselves Java
+// programs.
 //
-//   - Every file is assumed to declare exactly one top-level type whose
-//     name matches its filename - true for the overwhelming majority of
-//     real Java code, and Java's own style conventions actively encourage
-//     it, but a file with more than one top-level type only has its
-//     filename-matching type tracked precisely.
-//   - A same-package reference needs no import at all in real Java - a
-//     test class is routinely written in the very same package as the
-//     class it tests for exactly this reason - so a same-package
-//     candidate is resolved by checking whether its simple class name
-//     appears anywhere in the file's own identifier tokens, rather than
-//     either requiring an import that Java doesn't (a real
-//     under-approximation risk) or unconditionally linking every file in
-//     a package to every other one, which collapses to "the whole
-//     package is one unit" the moment a package holds more than a
-//     handful of files - exactly the common case for Maven/Gradle's own
-//     convention of mirroring src/main/java and src/test/java package
-//     layouts. The same token check resolves a wildcard import ("import
-//     a.b.*;") against every file in the wildcarded package, for the
-//     same reason. Java has no import-renaming syntax, so a real
-//     reference to a type always includes its simple name as a literal
-//     token somewhere in the file - a token match can occasionally be a
-//     false positive (a coincidentally-named comment, string, or local
-//     variable), which only ever costs an unnecessary extra test run, not
-//     a missed one.
-//   - A single-type import ("import a.b.C;", optionally "static") is
-//     resolved by exact fully-qualified-name match against every other
-//     file's own package+filename; one that doesn't match anything
-//     tracked (the overwhelming majority - the JDK itself, third-party
-//     libraries) is simply treated as external, the same way a
-//     node_modules import is for Jest/Vitest.
+// A real parse eliminates two genuine precision bugs a text-based regex
+// scan had (verified directly, by testing the parser shim standalone
+// before wiring it into Go at all): a commented-out or string-literal
+// "import ...;"/"package ...;" is correctly never seen as a real
+// declaration (a regex scanning line-by-line has no notion of a block
+// comment or a string literal), and a file declaring more than one
+// top-level type is handled correctly (a regex assumed exactly one,
+// matching the filename). What a parse-only pass still can't do, by
+// design, no matter how good the parser is: fully resolve a same-package
+// reference (needs no import at all in real Java - a test class is
+// routinely written in the very same package as the class it tests, for
+// exactly this reason) or a wildcard import's actual members, since both
+// require complete semantic resolution against a real classpath - the
+// exact thing parse-only mode deliberately avoids needing. Both are
+// instead resolved by checking whether the referenced type's simple name
+// appears among the real identifier tokens the parser found in the
+// file's actual code - not its comments or string literals, unlike the
+// old regex version, but still a token check rather than true symbol
+// resolution, so an occasional false positive (a coincidentally-named
+// local variable or field) is possible - always safe-direction
+// over-inclusion (an unnecessary extra test run), never a missed one,
+// since Java has no import-renaming syntax: a real reference to a type
+// always includes its simple name as a literal token somewhere in the
+// file's real code.
 package javaanalyzer
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -73,6 +79,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/graph"
 	"github.com/hpscript/fastci/internal/runner"
 )
@@ -121,68 +128,89 @@ var skipDirs = map[string]bool{
 	".mvn": true, "node_modules": true,
 }
 
-type javaFile struct {
-	path    string
-	pkg     string
-	class   string // filename without ".java" - see the package doc's scope note.
-	imports []importRef
-	idents  map[string]bool // every identifier token in the file - see the package doc.
+//go:embed FastciJavaParse.java
+var parserSource []byte
+
+// parsedFile is one file's entry in FastciJavaParse.java's own JSON
+// output - see that file's doc comment for exactly what each field means
+// and how it was derived.
+type parsedFile struct {
+	Package         string   `json:"package"`
+	Types           []string `json:"types"`
+	Imports         []string `json:"imports"`
+	WildcardImports []string `json:"wildcardImports"`
+	Identifiers     []string `json:"identifiers"`
 }
 
-type importRef struct {
-	fqcn     string
-	wildcard bool
+type parserOutput struct {
+	Files map[string]parsedFile `json:"files"`
 }
 
-var (
-	packageRE    = regexp.MustCompile(`^\s*package\s+([\w.]+)\s*;`)
-	importRE     = regexp.MustCompile(`^\s*import\s+(?:static\s+)?([\w.]+)(\.\*)?\s*;`)
-	identifierRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-)
-
-// parseJavaFile extracts path's package declaration, import list, and
-// full identifier-token set via a plain regex scan - see the package doc
-// for why this isn't a real parser.
-func parseJavaFile(path string) (javaFile, error) {
-	data, err := os.ReadFile(path)
+// writeParserScript writes the embedded Java shim to a file named to
+// match its own public class name, FastciJavaParse.java - required for
+// `java <file>.java` single-file source-code launch (JEP 330, Java 11+),
+// which has the same "filename must match the public class" restriction
+// plain javac does. Written into a fresh temp directory (rather than
+// alongside any real source file) so it can never collide with one.
+func writeParserScript() (path string, cleanup func(), err error) {
+	dir, err := os.MkdirTemp("", "fastci-java-parse-*")
 	if err != nil {
-		return javaFile{}, err
+		return "", nil, fmt.Errorf("javaanalyzer: %w", err)
 	}
-	content := string(data)
-	jf := javaFile{
-		path:  path,
-		class: strings.TrimSuffix(filepath.Base(path), ".java"),
+	path = filepath.Join(dir, "FastciJavaParse.java")
+	if err := os.WriteFile(path, parserSource, 0o644); err != nil {
+		os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("javaanalyzer: %w", err)
 	}
-	for _, line := range strings.Split(content, "\n") {
-		if m := packageRE.FindStringSubmatch(line); m != nil && jf.pkg == "" {
-			jf.pkg = m[1]
-			continue
-		}
-		if m := importRE.FindStringSubmatch(line); m != nil {
-			jf.imports = append(jf.imports, importRef{fqcn: m[1], wildcard: m[2] != ""})
-		}
-	}
-	tokens := identifierRE.FindAllString(content, -1)
-	jf.idents = make(map[string]bool, len(tokens))
-	for _, t := range tokens {
-		jf.idents[t] = true
-	}
-	return jf, nil
+	return path, func() { os.RemoveAll(dir) }, nil
 }
 
-// fqcnOf returns jf's own fully-qualified class name.
-func (jf javaFile) fqcnOf() string {
-	if jf.pkg == "" {
-		return jf.class
+// parseJavaFiles runs FastciJavaParse.java (see the package doc) against
+// every path, feeding the list via stdin (one per line) rather than argv
+// to avoid any risk of an argv-length limit on a large project, and
+// returns the parsed result keyed by absolute file path.
+func parseJavaFiles(paths []string) (map[string]parsedFile, error) {
+	if len(paths) == 0 {
+		return map[string]parsedFile{}, nil
 	}
-	return jf.pkg + "." + jf.class
+	javaBin, err := exec.LookPath("java")
+	if err != nil {
+		return nil, fmt.Errorf("javaanalyzer: java not found on PATH (needed to parse Java source via the JDK's own compiler frontend - install a JDK, e.g. from https://adoptium.net; anything that can run mvn/gradle already has one, since both are themselves Java programs)")
+	}
+
+	scriptPath, cleanup, err := writeParserScript()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	cmd := exec.Command(javaBin, scriptPath)
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n"))
+	done := debug.Command("javaanalyzer", cmd.Args, "")
+	out, err := cmd.Output()
+	done()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
+				return nil, fmt.Errorf("javaanalyzer: parsing Java source: %w\n%s", err, stderr)
+			}
+		}
+		return nil, fmt.Errorf("javaanalyzer: parsing Java source: %w", err)
+	}
+
+	var parsed parserOutput
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("javaanalyzer: parsing FastciJavaParse.java's output: %w", err)
+	}
+	return parsed.Files, nil
 }
 
-// Build walks dir for every *.java file, parses each (see parseJavaFile),
-// and builds a graph edge for every resolvable reference - see the
-// package doc for exactly what "resolvable" means here.
+// Build walks dir for every *.java file, parses all of them in one shim
+// invocation (see parseJavaFiles), and builds a graph edge for every
+// resolvable reference - see the package doc for exactly what
+// "resolvable" means here.
 func (*Analyzer) Build(dir string) (*graph.Graph, error) {
-	var files []javaFile
+	var paths []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -194,82 +222,96 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".java") {
-			return nil
+		if strings.HasSuffix(d.Name(), ".java") {
+			paths = append(paths, path)
 		}
-		jf, err := parseJavaFile(path)
-		if err != nil {
-			return nil // unreadable file - skip it, don't fail the whole scan.
-		}
-		files = append(files, jf)
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("javaanalyzer: scanning %s: %w", dir, err)
 	}
 
-	// fqcnToFile resolves a single-type import to the file that declares
-	// it; pkgToFiles is every other file sharing a package (for the
-	// same-package token check) and also every file in a wildcard-
-	// imported package (the same check, just keyed by a different
-	// package name).
+	files, err := parseJavaFiles(paths)
+	if err != nil {
+		return nil, err
+	}
+
+	// fqcnToFile resolves a direct type reference (a plain single-type
+	// import, or a static member/wildcard import - FastciJavaParse.java
+	// has already reduced both of those to the one type they actually
+	// name) to the file that declares it. Every top-level type a file
+	// declares is registered, not just one per file - a real parse
+	// handles more than one top-level type per file correctly, unlike
+	// the old filename-matching assumption. pkgToFiles is every file in
+	// a given package, for the same-package and wildcard-import token
+	// checks (see the package doc).
 	fqcnToFile := make(map[string]string, len(files))
-	pkgToFiles := make(map[string][]javaFile, len(files))
-	for _, jf := range files {
-		fqcnToFile[jf.fqcnOf()] = jf.path
-		pkgToFiles[jf.pkg] = append(pkgToFiles[jf.pkg], jf)
+	pkgToFiles := make(map[string][]string, len(files))
+	for path, pf := range files {
+		pkgToFiles[pf.Package] = append(pkgToFiles[pf.Package], path)
+		for _, t := range pf.Types {
+			fqcn := t
+			if pf.Package != "" {
+				fqcn = pf.Package + "." + t
+			}
+			fqcnToFile[fqcn] = path
+		}
+	}
+
+	// hasAnyType reports whether path declares a type whose simple name
+	// is among idents - the shared token check both the same-package and
+	// wildcard-import resolution below use.
+	hasAnyType := func(path string, idents map[string]bool) bool {
+		for _, t := range files[path].Types {
+			if idents[t] {
+				return true
+			}
+		}
+		return false
 	}
 
 	g := graph.New()
 	g.DisableDirFallback = true // one node per file - see package doc.
 
-	for _, jf := range files {
-		n := g.Node(jf.path)
-		n.Files = []string{jf.path}
-		if isTestFile(jf.path) {
+	for path, pf := range files {
+		n := g.Node(path)
+		n.Files = []string{path}
+		if isTestFile(path) {
 			n.HasTestFiles = true
+		}
+
+		idents := make(map[string]bool, len(pf.Identifiers))
+		for _, id := range pf.Identifiers {
+			idents[id] = true
 		}
 
 		// A same-package reference needs no import in real Java - see
 		// the package doc for why this is a token check, not an
 		// unconditional edge to every same-package file.
-		for _, sibling := range pkgToFiles[jf.pkg] {
-			if sibling.path != jf.path && jf.idents[sibling.class] {
-				n.Imports[sibling.path] = true
+		for _, sibling := range pkgToFiles[pf.Package] {
+			if sibling != path && hasAnyType(sibling, idents) {
+				n.Imports[sibling] = true
 			}
 		}
 
-		for _, imp := range jf.imports {
-			if imp.wildcard {
-				// Same token check as same-package above, just against
-				// the wildcarded package's members instead of this
-				// file's own - see the package doc.
-				for _, member := range pkgToFiles[imp.fqcn] {
-					if member.path != jf.path && jf.idents[member.class] {
-						n.Imports[member.path] = true
-					}
-				}
-				continue
-			}
-			fqcn := imp.fqcn
-			if target, ok := fqcnToFile[fqcn]; ok {
-				if target != jf.path {
-					n.Imports[target] = true
-				}
-				continue
-			}
-			// A "static" import names a member, not a class, as its last
-			// segment (e.g. "import static a.b.C.FOO;") - if the whole
-			// path isn't a known class, try again without that last
-			// segment before concluding it's external (JDK/third-party).
-			if i := strings.LastIndex(fqcn, "."); i > 0 {
-				if target, ok := fqcnToFile[fqcn[:i]]; ok && target != jf.path {
-					n.Imports[target] = true
-				}
+		for _, fqcn := range pf.Imports {
+			if target, ok := fqcnToFile[fqcn]; ok && target != path {
+				n.Imports[target] = true
 			}
 			// Otherwise: external (JDK, a third-party library, or a type
 			// genuinely not part of this project) - not a graph edge,
 			// the same treatment a node_modules import gets for Jest.
+		}
+
+		for _, pkg := range pf.WildcardImports {
+			// Same token check as same-package above, just against the
+			// wildcarded package's members instead of this file's own -
+			// see the package doc.
+			for _, member := range pkgToFiles[pkg] {
+				if member != path && hasAnyType(member, idents) {
+					n.Imports[member] = true
+				}
+			}
 		}
 	}
 

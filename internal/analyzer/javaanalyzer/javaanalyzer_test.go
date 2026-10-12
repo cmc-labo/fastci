@@ -280,6 +280,111 @@ public class User {
 	}
 }
 
+// TestBuildIgnoresCommentedOutImport is a regression test for a real bug
+// the old regexp-based scanner had and the real javac-parser-based one
+// fixes: a line-by-line regex has no notion of a block comment, so
+// "/* import com.example.other.Foo; */" was indistinguishable from a
+// real import. User.java here has no real import or reference to Foo at
+// all - only this commented-out one - so no edge should exist.
+func TestBuildIgnoresCommentedOutImport(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pom.xml"), "<project></project>")
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/other/Foo.java"), `package com.example.other;
+
+public class Foo {
+    public static int value() { return 1; }
+}
+`)
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/User.java"), `package com.example;
+
+/*
+import com.example.other.Foo;
+*/
+
+public class User {
+    public static int use() { return 0; }
+}
+`)
+	g, err := javaanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foo := filepath.Join(dir, "src/main/java/com/example/other/Foo.java")
+	user := filepath.Join(dir, "src/main/java/com/example/User.java")
+	if g.Nodes[user].Imports[foo] {
+		t.Errorf("User.java's Imports = %v, want it to NOT include Foo.java - the only \"import\" is commented out", g.Nodes[user].Imports)
+	}
+}
+
+// TestBuildIgnoresImportLookingTextInStringLiteral is the same class of
+// regression as TestBuildIgnoresCommentedOutImport, for a string literal
+// instead of a comment - equally invisible to a real parser, equally
+// indistinguishable from a real import to a text-based regex scan.
+func TestBuildIgnoresImportLookingTextInStringLiteral(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pom.xml"), "<project></project>")
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/other/Foo.java"), `package com.example.other;
+
+public class Foo {
+    public static int value() { return 1; }
+}
+`)
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/User.java"), `package com.example;
+
+public class User {
+    public static String use() {
+        return "import com.example.other.Foo;";
+    }
+}
+`)
+	g, err := javaanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foo := filepath.Join(dir, "src/main/java/com/example/other/Foo.java")
+	user := filepath.Join(dir, "src/main/java/com/example/User.java")
+	if g.Nodes[user].Imports[foo] {
+		t.Errorf("User.java's Imports = %v, want it to NOT include Foo.java - the only mention of it is inside a string literal", g.Nodes[user].Imports)
+	}
+}
+
+// TestBuildHandlesMultipleTopLevelTypesInOneFile is a regression test for
+// the other real limitation the old filename-matching assumption had: a
+// single file can legally declare more than one top-level type. Both
+// Primary (public) and Secondary (package-private) live in Multi.java;
+// User.java references Secondary (legally, via same-package visibility,
+// with no import) and must resolve to Multi.java, not go unresolved
+// because Secondary's name doesn't match its file's name.
+func TestBuildHandlesMultipleTopLevelTypesInOneFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pom.xml"), "<project></project>")
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/Multi.java"), `package com.example;
+
+public class Primary {
+    public static int value() { return 1; }
+}
+
+class Secondary {
+    public static int compute() { return 2; }
+}
+`)
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/User.java"), `package com.example;
+
+public class User {
+    public static int use() { return Secondary.compute(); }
+}
+`)
+	g, err := javaanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi := filepath.Join(dir, "src/main/java/com/example/Multi.java")
+	user := filepath.Join(dir, "src/main/java/com/example/User.java")
+	if !g.Nodes[user].Imports[multi] {
+		t.Errorf("User.java's Imports = %v, want it to include Multi.java via Secondary (its second, package-private top-level type)", g.Nodes[user].Imports)
+	}
+}
+
 func TestBuildMarksTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "pom.xml"), "<project></project>")
@@ -321,6 +426,27 @@ func TestBuildSkipsTargetDirectory(t *testing.T) {
 		if hasPathComponent(id, "target") {
 			t.Errorf("node %q was found under target/, want it skipped entirely", id)
 		}
+	}
+}
+
+// TestBuildFailsCleanlyWithoutJava reproduces the one new real precondition
+// this analyzer has compared to the old regexp-based version: parsing now
+// needs a `java` binary on PATH (to run the embedded FastciJavaParse.java
+// shim). Build must report that clearly rather than a bare, confusing
+// exec error - the same contract every other fastci subprocess failure
+// already honors.
+func TestBuildFailsCleanlyWithoutJava(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pom.xml"), "<project></project>")
+	writeFile(t, filepath.Join(dir, "src/main/java/com/example/Foo.java"), "package com.example;\nclass Foo {}\n")
+
+	t.Setenv("PATH", "")
+	_, err := javaanalyzer.New().Build(dir)
+	if err == nil {
+		t.Fatal("Build() with no java on PATH = nil error, want one")
+	}
+	if !strings.Contains(err.Error(), "java not found on PATH") {
+		t.Errorf("Build() error = %q, want it to clearly say java isn't on PATH", err.Error())
 	}
 }
 
