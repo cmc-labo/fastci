@@ -27,6 +27,7 @@ This is an early, incrementally-developed project. Today it covers:
 - **Python with pytest** — file-level
 - **Rust with Cargo** — crate-level, single crate or [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
 - **Java with Maven or Gradle** — file-level, single- or multi-module (see [Current limitations](#current-limitations))
+- **C# (.NET)** — file-level, a solution or standalone project (see [Current limitations](#current-limitations))
 
 See [Roadmap](#roadmap) for what's next.
 
@@ -137,11 +138,13 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
 1. `fastci test` auto-detects the project type in the working directory
    (Go module/workspace, a Vitest-configured project, a Jest-configured
    `package.json`, a pytest-configured Python project, a Rust
-   crate/Cargo workspace, or a Maven/Gradle Java project) and resolves the
-   files changed in your working tree (or, with `--base`, the files
-   changed between a base ref and `HEAD`).
+   crate/Cargo workspace, a Maven/Gradle Java project, or a .NET solution
+   or standalone project) and resolves the files changed in your working
+   tree (or, with `--base`, the files changed between a base ref and
+   `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
-   regex/string matching over import statements:
+   regex/string matching over import statements — **except for C#**,
+   covered last below, which is the current exception:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
      (backed by `go list`), which resolves module paths, `internal/`
      visibility, `replace` directives, and `go.work` workspaces exactly the
@@ -185,6 +188,19 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
      can run `mvn test`/`gradle test` at all already has a JDK installed.
      See [Current limitations](#current-limitations) for exactly what a
      parse-only pass still can't resolve, and why.
+   - **C# is the current exception**: unlike the JDK's own Compiler Tree
+     API (bundled with every JDK, used for Java above), the .NET
+     equivalent (Roslyn, `Microsoft.CodeAnalysis.CSharp`) is a separate
+     NuGet package, not bundled with the SDK itself - using it would mean
+     a `dotnet restore` (network access) just to build the graph, a real
+     new precondition every other analyzer above specifically avoids.
+     Instead, each `.cs` file's `namespace`/`using` declarations and
+     identifier tokens are read with a plain regexp scan - see
+     [Current limitations](#current-limitations) for exactly what this
+     does and doesn't catch, and why C#'s own `using` directives (which
+     name a *namespace*, almost never one specific type, unlike Java's
+     `import`) make this a bigger part of the design than it was for
+     Java's original version of the same approach.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -208,8 +224,10 @@ Run from the project root — a Go module (`go.mod`), a Go workspace
 a Jest project (`package.json` with Jest configured), a pytest project
 (`pytest.ini`, `conftest.py`, or a
 `[tool.pytest.ini_options]`/`[tool:pytest]` section), a Rust crate or
-Cargo workspace (`Cargo.toml`), or a single-module Maven (`pom.xml`) or
-Gradle (`build.gradle`/`build.gradle.kts`) Java project:
+Cargo workspace (`Cargo.toml`), a Maven (`pom.xml`) or Gradle
+(`build.gradle`/`build.gradle.kts`) Java project (single- or
+multi-module), or a .NET solution (`*.sln`) or standalone project
+(`*.csproj`):
 
 ```sh
 # Test whatever's affected by your uncommitted changes
@@ -321,6 +339,18 @@ fastci: 1 changed file(s):
 fastci: selected 2/3 test target(s) (java, 33% skipped)
     src/test/java/com/example/CalcTest.java
     src/test/java/com/example/FormatterTest.java
+fastci: dry-run, not executing tests
+```
+
+Example output (.NET/xUnit, a cross-project reference across a solution
+with two independent library+test project pairs):
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  LibA/Class1.cs
+fastci: selected 1/2 test target(s) (csharp, 50% skipped)
+    LibA.Tests/UnitTest1.cs
 fastci: dry-run, not executing tests
 ```
 
@@ -1037,6 +1067,11 @@ jobs:
       #     distribution: temurin
       #     java-version: "21"
 
+      # C# (.NET) projects
+      # - uses: actions/setup-dotnet@v4
+      #   with:
+      #     dotnet-version: "8.0.x"
+
       - run: go install github.com/hpscript/fastci/cmd/fastci@latest
       - run: fastci test --base origin/${{ github.base_ref }}
 ```
@@ -1297,6 +1332,50 @@ language's own toolchain at *test-run* time, not graph-build time).
   a global `mvn`/`gradle` install, the same reproducible-build convention
   real Maven/Gradle projects already widely use.
 
+**C# (.NET)**
+
+- This is a plain regexp scan over each `.cs` file's `namespace`/`using`
+  declarations and identifier tokens, not a real parser — unlike Java's
+  javac-based analyzer above, Roslyn (`Microsoft.CodeAnalysis.CSharp`)
+  isn't bundled with the .NET SDK, and pulling it in would mean a
+  `dotnet restore` (network access) just to build the dependency graph.
+  See [How it works](#how-it-works) for the full reasoning.
+- A plain `using Some.Namespace;` names a *namespace*, not one specific
+  type (unlike Java's `import a.b.C;`), so resolving it is a
+  namespace-plus-identifier-token check, not a pinpoint type lookup —
+  this is a blunter signal than Java's import resolution and can both
+  miss an edge (identifier collision across namespaces isn't
+  disambiguated) and keep one (any token match is treated as a
+  reference). `using static X.Y;` and `using Alias = X.Y;` are resolved
+  precisely, by exact fully-qualified-name match, since both name one
+  type (or namespace) directly. `global using` (C# 10+) is collected
+  project-wide and applied to every file, not just the one declaring it.
+- Test-file detection's primary signal is a test-framework attribute —
+  `[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`, `[TestMethod]`,
+  `[DataTestMethod]` — read directly from each file's contents, since no
+  .NET test framework (xUnit/NUnit/MSTest) depends on filename at all;
+  `dotnet new xunit`'s own default-generated `UnitTest1.cs` is a real
+  example of a test file no naming convention would catch. A
+  `*Test.cs`/`*Tests.cs` filename convention is still honored as a
+  fallback for files the attribute scan misses.
+- `bin/` and `obj/` directories are excluded, including the real `.cs`
+  files the .NET SDK unconditionally generates under `obj/` on every
+  build (`AssemblyInfo.cs`, `GlobalUsings.g.cs`, and similar) — a project
+  without a `.gitignore` excluding these can otherwise surface them as
+  unresolved changed files and force a full run.
+- Each file is assumed to declare at most one `namespace`; a file using
+  C#'s file-scoped (`namespace Foo;`) or block (`namespace Foo { ... }`)
+  syntax works either way, but a file with more than one `namespace`
+  block is not specifically handled.
+- `Detect()` looks for a `*.sln` or `*.csproj` at the project root; a
+  directory with multiple `.csproj` files and no `.sln` tying them
+  together is detected, but cross-project references between them rely
+  on the same namespace/using resolution as everything else, not any
+  `.sln`/`.csproj` project-reference parsing.
+- `*.csproj`, `*.sln`, `Directory.Build.props`/`.targets`,
+  `Directory.Packages.props`, and `nuget.config` changing all force a
+  full run, the same rationale as `pom.xml`/`build.gradle` above.
+
 ## Troubleshooting
 
 **`command not found: fastci` after `go install`**
@@ -1419,7 +1498,8 @@ Language coverage grows incrementally alongside this. Vite `resolve.alias`
 resolution, Vitest/Jest monorepo/workspace cross-package resolution,
 function-level impact analysis (Go only for now — see
 [Function-level impact analysis (Go)](#function-level-impact-analysis-go)),
-and an initial Java (Maven/Gradle) analyzer are all implemented — see
+an initial Java (Maven/Gradle) analyzer, and an initial C# (.NET) analyzer
+are all implemented — see
 [Current limitations](#current-limitations) above for exactly how mature
 each is. Extending function-level analysis to Jest/Vitest/pytest is not
 planned in the near term: unlike Go, a sound static call graph for
