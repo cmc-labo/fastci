@@ -143,8 +143,7 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
    tree (or, with `--base`, the files changed between a base ref and
    `HEAD`).
 2. It builds a dependency graph using the **real language tooling**, not
-   regex/string matching over import statements — **except for C#**,
-   covered last below, which is the current exception:
+   regex/string matching over import statements:
    - Go: [`go/packages`](https://pkg.go.dev/golang.org/x/tools/go/packages)
      (backed by `go list`), which resolves module paths, `internal/`
      visibility, `replace` directives, and `go.work` workspaces exactly the
@@ -188,19 +187,30 @@ behave as expected, check [Troubleshooting](#troubleshooting) first.
      can run `mvn test`/`gradle test` at all already has a JDK installed.
      See [Current limitations](#current-limitations) for exactly what a
      parse-only pass still can't resolve, and why.
-   - **C# is the current exception**: unlike the JDK's own Compiler Tree
-     API (bundled with every JDK, used for Java above), the .NET
-     equivalent (Roslyn, `Microsoft.CodeAnalysis.CSharp`) is a separate
-     NuGet package, not bundled with the SDK itself - using it would mean
-     a `dotnet restore` (network access) just to build the graph, a real
-     new precondition every other analyzer above specifically avoids.
-     Instead, each `.cs` file's `namespace`/`using` declarations and
-     identifier tokens are read with a plain regexp scan - see
+   - C#: Roslyn (`Microsoft.CodeAnalysis.CSharp`) - the same compiler
+     frontend `csc` itself uses - run via a small shim embedded in fastci,
+     in parse-only mode (`CSharpSyntaxTree.ParseText`, never a
+     `Compilation`/`SemanticModel`), the same "needs nothing beyond the
+     source tree itself" guarantee as Java above. Unlike the JDK, which
+     exposes its Compiler Tree API as a public, single-file-launchable API
+     any JDK install already has on hand, the .NET SDK doesn't package
+     Roslyn as a NuGet-free API - `Microsoft.CodeAnalysis.CSharp` is
+     normally a separate NuGet package. But Roslyn is already present on
+     disk inside every .NET SDK install regardless, at
+     `<sdk>/Roslyn/bincore` (it's how `csc.dll` itself is implemented) -
+     fastci compiles its own shim directly against those bundled
+     assemblies (`dotnet exec <sdk>/Roslyn/bincore/csc.dll ...`, the SDK's
+     own compiler, invoked directly), the one time it's needed per project
+     (cached under `.fastci-cache/` after that), with **no NuGet restore
+     and no network access at any point** - verified directly, with
+     network access blocked outright. It does need a `dotnet` binary on
+     PATH, which in practice is never a new requirement - anything that
+     can run `dotnet test` at all already has one. See
      [Current limitations](#current-limitations) for exactly what this
-     does and doesn't catch, and why C#'s own `using` directives (which
+     does and doesn't resolve, and why C#'s own `using` directives (which
      name a *namespace*, almost never one specific type, unlike Java's
-     `import`) make this a bigger part of the design than it was for
-     Java's original version of the same approach.
+     `import`) make the identifier-token check a bigger part of the
+     design than it is for Java.
 3. It builds a reverse dependency index from that graph: for every
    package/file, what imports it (directly or transitively) — including
    edges that only exist through test files.
@@ -342,8 +352,8 @@ fastci: selected 2/3 test target(s) (java, 33% skipped)
 fastci: dry-run, not executing tests
 ```
 
-Example output (.NET/xUnit, a cross-project reference across a solution
-with two independent library+test project pairs):
+Example output (.NET/xUnit, a cross-project reference - via a nested type
+- across a solution with two independent library+test project pairs):
 
 ```
 $ fastci test --dry-run -v
@@ -1334,12 +1344,16 @@ language's own toolchain at *test-run* time, not graph-build time).
 
 **C# (.NET)**
 
-- This is a plain regexp scan over each `.cs` file's `namespace`/`using`
-  declarations and identifier tokens, not a real parser — unlike Java's
-  javac-based analyzer above, Roslyn (`Microsoft.CodeAnalysis.CSharp`)
-  isn't bundled with the .NET SDK, and pulling it in would mean a
-  `dotnet restore` (network access) just to build the dependency graph.
-  See [How it works](#how-it-works) for the full reasoning.
+- Parsing is a real one: Roslyn (`Microsoft.CodeAnalysis.CSharp`), run
+  via a shim fastci compiles against the copy already bundled inside the
+  installed .NET SDK (`<sdk>/Roslyn/bincore`), with no NuGet restore and
+  no network access — see [How it works](#how-it-works) for exactly how.
+  Every type a file declares is registered with its own correct
+  fully-qualified name, including a nested type (`Outer+Inner`, reflection's
+  own notation) at any depth, and a file declaring more than one
+  `namespace` block has each of its types correctly attributed to its own
+  enclosing one — both genuine gaps an earlier, regexp-based version of
+  this analyzer had.
 - A plain `using Some.Namespace;` names a *namespace*, not one specific
   type (unlike Java's `import a.b.C;`), so resolving it is a
   namespace-plus-identifier-token check, not a pinpoint type lookup —
@@ -1348,25 +1362,37 @@ language's own toolchain at *test-run* time, not graph-build time).
   disambiguated) and keep one (any token match is treated as a
   reference). `using static X.Y;` and `using Alias = X.Y;` are resolved
   precisely, by exact fully-qualified-name match, since both name one
-  type (or namespace) directly. `global using` (C# 10+) is collected
-  project-wide and applied to every file, not just the one declaring it.
+  type (or namespace) directly. `global using` (C# 10+, any of the three
+  forms) is collected project-wide and applied to every file, not just
+  the one declaring it.
 - Test-file detection's primary signal is a test-framework attribute —
   `[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`, `[TestMethod]`,
-  `[DataTestMethod]` — read directly from each file's contents, since no
+  `[DataTestMethod]` (with or without the attribute class's own
+  `Attribute` suffix) — found directly in the parsed syntax tree, since no
   .NET test framework (xUnit/NUnit/MSTest) depends on filename at all;
   `dotnet new xunit`'s own default-generated `UnitTest1.cs` is a real
   example of a test file no naming convention would catch. A
   `*Test.cs`/`*Tests.cs` filename convention is still honored as a
-  fallback for files the attribute scan misses.
+  fallback for files the attribute scan misses, and as the way a specific
+  type is chosen for test execution out of several declared in one file
+  (picking *which* type to run can't use the attribute signal the same
+  way isolating a test *file* can).
 - `bin/` and `obj/` directories are excluded, including the real `.cs`
   files the .NET SDK unconditionally generates under `obj/` on every
   build (`AssemblyInfo.cs`, `GlobalUsings.g.cs`, and similar) — a project
   without a `.gitignore` excluding these can otherwise surface them as
   unresolved changed files and force a full run.
-- Each file is assumed to declare at most one `namespace`; a file using
-  C#'s file-scoped (`namespace Foo;`) or block (`namespace Foo { ... }`)
-  syntax works either way, but a file with more than one `namespace`
-  block is not specifically handled.
+- A file with a genuine syntax error is dropped from the parser's output
+  entirely rather than risk guessing from a broken recovery tree — it
+  then looks like an unresolvable changed file if it's the one that
+  changed, the same conservative "don't guess" fallback to a full run
+  every other analyzer uses for an unparseable file.
+- The compiled parser shim is cached under the project's own
+  `.fastci-cache/` directory (gitignored automatically), recompiled only
+  when fastci's own embedded shim source or the installed SDK's Roslyn
+  path changes — the first `fastci test` in a given project pays a
+  roughly one-second one-time compile cost; every run after that reuses
+  it.
 - `Detect()` looks for a `*.sln` or `*.csproj` at the project root; a
   directory with multiple `.csproj` files and no `.sln` tying them
   together is detected, but cross-project references between them rely

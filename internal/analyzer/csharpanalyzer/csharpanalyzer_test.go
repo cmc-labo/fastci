@@ -391,6 +391,210 @@ func TestIgnorableSkipsSDKGeneratedFilesUnderObj(t *testing.T) {
 	}
 }
 
+// TestBuildResolvesNestedType is a regression test for a real precision
+// gain the Roslyn migration unlocks: a nested type gets its own correct
+// fully-qualified name (reflection's own "Outer+Inner" notation), so a
+// same-namespace reference to it resolves exactly like any other type -
+// the old regexp-based version couldn't distinguish a nested type from a
+// top-level one at all.
+func TestBuildResolvesNestedType(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "Outer.cs"), `namespace Example;
+
+public class Outer
+{
+    public class Inner
+    {
+        public static int Value() => 1;
+    }
+}
+`)
+	writeFile(t, filepath.Join(dir, "Consumer.cs"), `namespace Example;
+
+public class Consumer
+{
+    public static int Use() => Outer.Inner.Value();
+}
+`)
+	g, err := csharpanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer := filepath.Join(dir, "Outer.cs")
+	consumer := filepath.Join(dir, "Consumer.cs")
+	if !g.Nodes[consumer].Imports[outer] {
+		t.Errorf("Consumer.cs's Imports = %v, want it to include Outer.cs via its nested Inner type", g.Nodes[consumer].Imports)
+	}
+}
+
+// TestBuildHandlesMultipleNamespacesInOneFile is a regression test for
+// another real precision gain: a file declaring more than one namespace
+// block (legal, if unusual, C#) now has each of its types correctly
+// attributed to its own enclosing namespace - the old regexp-based
+// version only ever tracked a single "first namespace found" per file.
+func TestBuildHandlesMultipleNamespacesInOneFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "Multi.cs"), `namespace First
+{
+    public class FirstThing
+    {
+        public static int Value() => 1;
+    }
+}
+
+namespace Second
+{
+    public class SecondThing
+    {
+    }
+}
+`)
+	writeFile(t, filepath.Join(dir, "Consumer.cs"), `namespace First;
+
+public class Consumer
+{
+    public static int Use() => FirstThing.Value();
+}
+`)
+	g, err := csharpanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi := filepath.Join(dir, "Multi.cs")
+	consumer := filepath.Join(dir, "Consumer.cs")
+	if !g.Nodes[consumer].Imports[multi] {
+		t.Errorf("Consumer.cs's Imports = %v, want it to include Multi.cs via FirstThing (in the matching `First` namespace block)", g.Nodes[consumer].Imports)
+	}
+}
+
+// TestBuildGlobalUsingStaticAppliesToEveryFile is a regression test for a
+// real gap the old regexp-based version had: it only ever folded a
+// `global using static`/`global using Alias = ...` into the *declaring*
+// file's own resolution, never applying it project-wide the way a plain
+// `global using` already did - even though "global" means project-wide
+// for all three forms equally in real C#.
+func TestBuildGlobalUsingStaticAppliesToEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "GlobalUsings.cs"), "global using static Example.Constants;\n")
+	writeFile(t, filepath.Join(dir, "Constants.cs"), `namespace Example;
+
+public static class Constants
+{
+    public const int Foo = 1;
+}
+`)
+	writeFile(t, filepath.Join(dir, "User.cs"), `namespace Other;
+
+public class User
+{
+    public static int Use() => Foo;
+}
+`)
+	g, err := csharpanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	constants := filepath.Join(dir, "Constants.cs")
+	user := filepath.Join(dir, "User.cs")
+	if !g.Nodes[user].Imports[constants] {
+		t.Errorf("User.cs's Imports = %v, want it to include Constants.cs via the project-wide global using-static (no local using needed)", g.Nodes[user].Imports)
+	}
+}
+
+// TestBuildIgnoresUsingLookingTextInCommentOrString is a regression test
+// for a real precision gain a real parser gives over a text-based regex
+// scan: a commented-out or string-literal "using ...;"/"namespace ...;"
+// is correctly never seen as a real declaration at all.
+func TestBuildIgnoresUsingLookingTextInCommentOrString(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "Other", "Used.cs"), `namespace Other;
+
+public class Used
+{
+}
+`)
+	writeFile(t, filepath.Join(dir, "Thing.cs"), `// using Other;
+namespace Example;
+
+public class Thing
+{
+    string note = "using Other; namespace Other;";
+}
+`)
+	g, err := csharpanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := filepath.Join(dir, "Other", "Used.cs")
+	thing := filepath.Join(dir, "Thing.cs")
+	if g.Nodes[thing].Imports[used] {
+		t.Errorf("Thing.cs's Imports = %v, want it to NOT include Used.cs - the only mentions of \"using Other\" are in a comment and a string literal", g.Nodes[thing].Imports)
+	}
+}
+
+// TestBuildDropsFileWithSyntaxError is a regression test matching
+// FastciJavaParse.java's own "skip it, don't guess" conservatism: a file
+// with a genuine syntax error is dropped from the parser's own output
+// entirely, rather than risk building graph edges from a broken recovery
+// tree - Build itself must still succeed (impact.Compute's own "unresolved
+// source file" safety net is what actually reacts to this, not a hard
+// error here).
+func TestBuildDropsFileWithSyntaxError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "Good.cs"), "namespace Example;\npublic class Good {}\n")
+	writeFile(t, filepath.Join(dir, "Broken.cs"), "namespace Example {\n  public class Broken {\n    public void M( {\n  }\n")
+
+	g, err := csharpanalyzer.New().Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(dir, "Good.cs")
+	broken := filepath.Join(dir, "Broken.cs")
+	if g.Nodes[good] == nil {
+		t.Error("Good.cs: expected a graph node, got none")
+	}
+	if _, ok := g.Nodes[broken]; ok {
+		t.Error("Broken.cs: expected no graph node for a file with a real syntax error, got one")
+	}
+}
+
+// TestBuildReusesCompiledShimAcrossCalls exercises the cache-reuse path
+// in ensureCompiledShim (a second Build call against the same project
+// directory must find the already-compiled shim under .fastci-cache and
+// skip recompiling it) - a correctness check (the second call must still
+// produce the right graph), not a timing assertion.
+func TestBuildReusesCompiledShimAcrossCalls(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "App.csproj"), "<Project></Project>")
+	writeFile(t, filepath.Join(dir, "Leaf.cs"), "namespace Example;\npublic class Leaf { public static int Value() => 1; }\n")
+	writeFile(t, filepath.Join(dir, "Consumer.cs"), "namespace Example;\npublic class Consumer { public static int Use() => Leaf.Value(); }\n")
+
+	a := csharpanalyzer.New()
+	if _, err := a.Build(dir); err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot := filepath.Join(dir, ".fastci-cache")
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected a compiled shim cached under %s after the first Build call, got entries=%v err=%v", cacheRoot, entries, err)
+	}
+
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(dir, "Leaf.cs")
+	consumer := filepath.Join(dir, "Consumer.cs")
+	if !g.Nodes[consumer].Imports[leaf] {
+		t.Errorf("second Build call: Consumer.cs's Imports = %v, want it to include Leaf.cs", g.Nodes[consumer].Imports)
+	}
+}
+
 func TestAllTargetsReturnsNil(t *testing.T) {
 	a := csharpanalyzer.New()
 	targets, err := a.AllTargets(t.TempDir())
