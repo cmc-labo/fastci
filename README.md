@@ -1303,7 +1303,8 @@ language's own toolchain at *test-run* time, not graph-build time).
     every module in the reactor/build still gets processed (compiled),
     even ones with nothing selected to actually test. Selection is still
     fully correct either way; this is a performance opportunity, not a
-    correctness gap.
+    correctness gap. See [the Java benchmark](docs/benchmarks/java/README.md)
+    for exactly how much that opportunity is worth, measured directly.
 - **Import resolution is a real parse** (the JDK's own Compiler Tree API,
   parse-only - see [How it works](#how-it-works)), not jdeps and not a
   regexp scan, but a parse-only pass still can't do everything full

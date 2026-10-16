@@ -1,10 +1,13 @@
-# Benchmarks
+# Benchmarks: Go
 
 Real, reproducible measurements of `fastci test` against synthetic Go
 repositories of varying size, run on this machine and committed alongside
 the scripts that produced them. No numbers here are estimated, projected,
 or drawn from a real company's private CI — everything is generated and
 measured by the scripts in this directory, which anyone can re-run.
+
+See [Java (Maven)](java/README.md) for the same methodology applied to
+fastci's Java analyzer.
 
 ```sh
 docs/benchmarks/generate.sh <dir> <N>              # generate an N-package synthetic repo
