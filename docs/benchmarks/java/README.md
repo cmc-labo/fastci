@@ -145,7 +145,7 @@ than it does here.
 
 **This is a real, documented room-for-improvement, not swept under the
 rug**: `RunTests` (see
-[javaanalyzer.go](../../../internal/analyzer/javaanalyzer.go)) selects
+[javaanalyzer.go](../../../internal/analyzer/javaanalyzer/javaanalyzer.go)) selects
 tests via Surefire's `-Dtest=...`/Gradle's `--tests`, run across the
 *whole* reactor - it does not use Maven's own `-pl <modules> -am` (or
 Gradle's analogous project-exclusion) to skip *building* the modules

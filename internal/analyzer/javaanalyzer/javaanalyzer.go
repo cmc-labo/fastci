@@ -344,9 +344,24 @@ func (*Analyzer) FullRunFile(absPath string) bool {
 	return fullRunBasenames[filepath.Base(absPath)]
 }
 
-// Ignorable reports whether a changed non-Java file is safe to ignore.
+// Ignorable reports whether a changed non-.java file, or a file under
+// target/build (skipDirs), is safe to ignore. The skipDirs check matters
+// for the same reason csharpanalyzer's own equivalent does: a Maven/
+// Gradle annotation processor (or protobuf, or similar) can generate real
+// .java files under target/generated-sources - without this check, a
+// project whose target/ isn't gitignored would see those as unresolvable
+// source changes (Build's own skipDirs walk never registers them as
+// graph nodes) and force a full run for no real reason.
 func (*Analyzer) Ignorable(absPath string) bool {
-	return filepath.Ext(absPath) != ".java"
+	if filepath.Ext(absPath) != ".java" {
+		return true
+	}
+	for _, part := range strings.Split(filepath.ToSlash(absPath), "/") {
+		if skipDirs[part] {
+			return true
+		}
+	}
+	return false
 }
 
 // AllTargets returns nil: both `mvn test` and `gradle test`, run with no

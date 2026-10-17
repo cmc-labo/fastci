@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/hpscript/fastci/internal/analyzer"
+	"github.com/hpscript/fastci/internal/debug"
 	"github.com/hpscript/fastci/internal/runner"
 )
 
@@ -210,10 +211,7 @@ func captureOutputPTY(fn func() error) (output []byte, runErr error, ok bool) {
 	os.Stdout, os.Stderr = slave, slave
 	var buf bytes.Buffer
 	copyDone := make(chan struct{})
-	go func() {
-		io.Copy(io.MultiWriter(origOut, &buf), master)
-		close(copyDone)
-	}()
+	go copyOutputAndSignal(io.MultiWriter(origOut, &buf), master, copyDone)
 
 	runErr = func() error {
 		defer func() {
@@ -225,6 +223,25 @@ func captureOutputPTY(fn func() error) (output []byte, runErr error, ok bool) {
 	<-copyDone
 
 	return buf.Bytes(), runErr, true
+}
+
+// copyOutputAndSignal copies from src to dst, closing done once it's
+// finished - panic or not, so the captureOutputPTY/captureOutputPipe
+// caller blocked on <-done is never left hanging - and recovers from any
+// panic rather than letting it crash the whole fastci process. This runs
+// on every single `fastci test` invocation, not an opt-in feature like
+// netmonitor's own proxy - a panic here (bytes.Buffer.Write hitting
+// ErrTooLarge on a truly runaway output stream, say) must not take the
+// whole run down over what's otherwise just output capture for a failure
+// log.
+func copyOutputAndSignal(dst io.Writer, src io.Reader, done chan struct{}) {
+	defer close(done)
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Logf("failurelog: recovered from panic capturing output: %v", r)
+		}
+	}()
+	io.Copy(dst, src)
 }
 
 // disableONLCR clears the pty's ONLCR output flag (best-effort - a failure
@@ -254,10 +271,7 @@ func captureOutputPipe(fn func() error) ([]byte, error) {
 	os.Stdout, os.Stderr = w, w
 	var buf bytes.Buffer
 	copyDone := make(chan struct{})
-	go func() {
-		io.Copy(io.MultiWriter(origOut, &buf), r)
-		close(copyDone)
-	}()
+	go copyOutputAndSignal(io.MultiWriter(origOut, &buf), r, copyDone)
 
 	runErr := func() error {
 		defer func() {

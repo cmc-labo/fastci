@@ -26,6 +26,15 @@ import (
 	"github.com/hpscript/fastci/internal/runner"
 )
 
+// skipDirs are the same directories Build's own walk-pruning closure
+// (skipDir, below) already excludes - duplicated here, rather than
+// shared, since Ignorable needs every path component checked
+// (target/generated/foo.rs) while Build only needs to recognize the
+// directory itself to prune the walk there.
+var skipDirs = map[string]bool{
+	"target": true, ".git": true,
+}
+
 // Analyzer is the Cargo implementation of analyzer.Analyzer.
 type Analyzer struct{}
 
@@ -247,9 +256,24 @@ func (*Analyzer) FullRunFile(absPath string) bool {
 	return false
 }
 
-// Ignorable reports whether a changed non-Rust file is safe to ignore.
+// Ignorable reports whether a changed non-.rs file, or a file under
+// target/.git (skipDirs), is safe to ignore. The skipDirs check matters
+// for the same reason csharpanalyzer's own equivalent does: a build.rs
+// codegen step (or similar) can emit real .rs files under target/ -
+// without this check, a project whose target/ isn't gitignored would see
+// those as unresolvable source changes (Build's own skipDir walk-pruning
+// never registers them as graph nodes) and force a full run for no real
+// reason.
 func (*Analyzer) Ignorable(absPath string) bool {
-	return filepath.Ext(absPath) != ".rs"
+	if filepath.Ext(absPath) != ".rs" {
+		return true
+	}
+	for _, part := range strings.Split(filepath.ToSlash(absPath), "/") {
+		if skipDirs[part] {
+			return true
+		}
+	}
+	return false
 }
 
 // AllTargets returns nil: `cargo test` run with no -p flags already tests

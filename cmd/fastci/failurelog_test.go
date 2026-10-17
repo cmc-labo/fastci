@@ -280,3 +280,33 @@ func captureStdoutErr(t *testing.T, fn func() error) error {
 	})
 	return err
 }
+
+// panicWriter is an io.Writer whose Write always panics - standing in for
+// whatever could make io.Copy's destination panic for real (bytes.Buffer
+// hitting ErrTooLarge on a truly runaway output stream, for one).
+type panicWriter struct{}
+
+func (panicWriter) Write([]byte) (int, error) {
+	panic("boom: simulated panic writing captured output")
+}
+
+// TestCopyOutputAndSignalRecoversFromPanic is a regression test for
+// captureOutputPTY/captureOutputPipe's own background copy goroutine: a
+// panic in io.Copy (there, from the destination bytes.Buffer; here,
+// simulated directly via panicWriter so the test doesn't need to produce
+// gigabytes of output to actually trigger ErrTooLarge) must not crash the
+// whole process, and done must still close so a caller blocked on <-done
+// doesn't hang.
+func TestCopyOutputAndSignalRecoversFromPanic(t *testing.T) {
+	done := make(chan struct{})
+
+	// If copyOutputAndSignal didn't recover, this would panic and crash
+	// the whole test binary, not just fail this test.
+	copyOutputAndSignal(panicWriter{}, strings.NewReader("some output"), done)
+
+	select {
+	case <-done:
+	default:
+		t.Error("done was not closed - a recovered panic must still signal completion")
+	}
+}

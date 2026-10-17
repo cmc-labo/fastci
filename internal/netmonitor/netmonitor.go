@@ -228,14 +228,27 @@ func splice(client net.Conn, upstream net.Conn, buffered *bufio.Reader) {
 		}
 	}
 
+	// A panic in either direction's own goroutine isn't caught by
+	// handleSafely's recover - that only covers panics in the goroutine it
+	// itself runs in (the one that calls handle, which calls splice), not
+	// these two separately-spawned ones. Without its own recover, a panic
+	// here (e.g. from a pathological net.Conn implementation on either
+	// side) would still crash the whole proxy, the exact failure mode
+	// handleSafely exists to prevent - so done is signaled from a defer,
+	// unconditionally, rather than only after io.Copy returns normally,
+	// so a recovered panic on one side still lets splice return promptly
+	// instead of only ever doing so via the other side's own completion.
 	done := make(chan struct{}, 2)
-	go func() {
-		io.Copy(upstream, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(client, upstream)
-		done <- struct{}{}
-	}()
+	copyAndSignal := func(dst, src net.Conn, direction string) {
+		defer func() { done <- struct{}{} }()
+		defer func() {
+			if r := recover(); r != nil {
+				debug.Logf("netmonitor: recovered from panic splicing %s: %v", direction, r)
+			}
+		}()
+		io.Copy(dst, src)
+	}
+	go copyAndSignal(upstream, client, "client->upstream")
+	go copyAndSignal(client, upstream, "upstream->client")
 	<-done
 }

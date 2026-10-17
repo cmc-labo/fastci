@@ -481,6 +481,24 @@ func TestIgnorable(t *testing.T) {
 	}
 }
 
+// TestIgnorableSkipsGeneratedFilesUnderTargetOrBuild is a regression test
+// mirroring csharpanalyzer's own TestIgnorableSkipsSDKGeneratedFilesUnderObj:
+// a Maven/Gradle annotation processor (or similar codegen) can emit real
+// .java files under target/build, which Build's own skipDirs walk never
+// registers as a graph node - without this check they'd look like an
+// unresolvable source change and force a full run for no real reason.
+func TestIgnorableSkipsGeneratedFilesUnderTargetOrBuild(t *testing.T) {
+	a := javaanalyzer.New()
+	for _, p := range []string{
+		"/repo/target/generated-sources/annotations/com/example/Foo.java",
+		"/repo/build/generated/source/proto/main/java/Bar.java",
+	} {
+		if !a.Ignorable(p) {
+			t.Errorf("Ignorable(%q) = false, want true (generated, under target/build)", p)
+		}
+	}
+}
+
 func TestAllTargetsReturnsNil(t *testing.T) {
 	a := javaanalyzer.New()
 	targets, err := a.AllTargets(t.TempDir())

@@ -117,3 +117,31 @@ func TestTargetForDirResolvesCrateRoot(t *testing.T) {
 		t.Errorf("TargetForDir(%s) = %q, %v; want mid, true", crateRoot, target, ok)
 	}
 }
+
+func TestIgnorable(t *testing.T) {
+	a := cargoanalyzer.New()
+	if !a.Ignorable("/repo/README.md") {
+		t.Error("Ignorable(README.md) = false, want true")
+	}
+	if a.Ignorable("/repo/src/lib.rs") {
+		t.Error("Ignorable(lib.rs) = true, want false")
+	}
+}
+
+// TestIgnorableSkipsGeneratedFilesUnderTarget is a regression test
+// mirroring csharpanalyzer's own TestIgnorableSkipsSDKGeneratedFilesUnderObj:
+// a build.rs codegen step can emit real .rs files under target/, which
+// Build's own skipDir walk-pruning never registers as a graph node -
+// without this check they'd look like an unresolvable source change and
+// force a full run for no real reason.
+func TestIgnorableSkipsGeneratedFilesUnderTarget(t *testing.T) {
+	a := cargoanalyzer.New()
+	for _, p := range []string{
+		"/repo/target/debug/build/myapp-abc123/out/generated.rs",
+		"/repo/target/release/build/myapp-abc123/out/generated.rs",
+	} {
+		if !a.Ignorable(p) {
+			t.Errorf("Ignorable(%q) = false, want true (generated, under target/)", p)
+		}
+	}
+}
