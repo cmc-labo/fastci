@@ -113,6 +113,11 @@ func (c *Cache) Filter(g *graph.Graph, analyzerName string, extraArgs []string, 
 		go func(i int, key string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// remote.go's own package doc promises every call is
+			// best-effort and never fails the actual test run - a
+			// panic here must honor that promise too, not just an
+			// ordinary error return.
+			defer func() { recover() }()
 			lookups[i].hit = c.remote.get(key)
 		}(i, key)
 	}
@@ -159,6 +164,9 @@ func (c *Cache) RecordPass(g *graph.Graph, analyzerName string, extraArgs []stri
 		go func(key string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Same best-effort guarantee as Filter's own lookup
+			// goroutine above - a panic here must not escape either.
+			defer func() { recover() }()
 			c.remote.put(key)
 		}(key)
 	}

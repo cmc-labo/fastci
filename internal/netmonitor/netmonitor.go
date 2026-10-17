@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+
+	"github.com/hpscript/fastci/internal/debug"
 )
 
 // Proxy is a running local forward proxy. Create one with Start and stop
@@ -107,9 +109,25 @@ func (p *Proxy) acceptLoop() {
 		go func() {
 			defer p.wg.Done()
 			defer p.untrack(conn)
-			p.handle(conn)
+			p.handleSafely(conn)
 		}()
 	}
+}
+
+// handleSafely calls handle, recovering from any panic rather than letting
+// it escape. A panic handling one connection (malformed CONNECT/HTTP
+// input, an unexpected net.Conn state) must never take down the whole
+// proxy - and with it, the real test/build run fastci guard's
+// network-egress report exists to observe - over a single bad connection.
+// Mirrors goanalyzer.RefineRunFilter's own recover for the same reason:
+// this is a failure mode no ordinary error return can cover.
+func (p *Proxy) handleSafely(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Logf("netmonitor: recovered from panic handling a connection: %v", r)
+		}
+	}()
+	p.handle(conn)
 }
 
 func (p *Proxy) track(c net.Conn) bool {
