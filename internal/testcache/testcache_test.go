@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/testcache"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/testcache"
 )
 
 func writeFile(t *testing.T, path, content string) {

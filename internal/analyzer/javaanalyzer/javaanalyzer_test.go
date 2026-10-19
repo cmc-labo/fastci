@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/javaanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/javaanalyzer"
 )
 
 func writeFile(t *testing.T, path, content string) {

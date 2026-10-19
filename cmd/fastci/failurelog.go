@@ -14,9 +14,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/hpscript/fastci/internal/analyzer"
-	"github.com/hpscript/fastci/internal/debug"
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/analyzer"
+	"github.com/cmc-labo/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // failureLogMaxOutput caps how much of a run's combined stdout/stderr gets

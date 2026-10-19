@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hpscript/fastci/internal/guard"
+	"github.com/cmc-labo/fastci/internal/guard"
 )
 
 // TestPipAuditTargetsActiveVenvNotItsOwnInterpreter is a real integration

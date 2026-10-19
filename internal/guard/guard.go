@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // Result is the outcome of running one Checker.

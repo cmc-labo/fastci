@@ -1,4 +1,4 @@
-module github.com/hpscript/fastci
+module github.com/cmc-labo/fastci
 
 go 1.25.0
 

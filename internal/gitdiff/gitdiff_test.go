@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/cmc-labo/fastci/internal/gitdiff"
 )
 
 // runGitT runs git in dir, failing the test on error. Local clones ignore

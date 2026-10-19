@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // TestRunKillsWholeProcessGroupOnCancel guards against a real bug: none of

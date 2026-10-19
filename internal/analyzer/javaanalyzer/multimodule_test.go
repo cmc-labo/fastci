@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/javaanalyzer"
-	"github.com/hpscript/fastci/internal/impact"
+	"github.com/cmc-labo/fastci/internal/analyzer/javaanalyzer"
+	"github.com/cmc-labo/fastci/internal/impact"
 )
 
 // This file is a comprehensive integration test suite for the Java

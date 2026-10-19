@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/anthropic"
+	"github.com/cmc-labo/fastci/internal/anthropic"
 )
 
 func TestCreateMessageSendsExpectedRequestAndParsesResponse(t *testing.T) {

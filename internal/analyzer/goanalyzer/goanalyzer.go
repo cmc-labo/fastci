@@ -21,9 +21,9 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/hpscript/fastci/internal/debug"
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // Analyzer is the Go implementation of analyzer.Analyzer.

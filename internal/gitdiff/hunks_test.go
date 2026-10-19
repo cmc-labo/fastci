@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/cmc-labo/fastci/internal/gitdiff"
 )
 
 func initRepo(t *testing.T) string {

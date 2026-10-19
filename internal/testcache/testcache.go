@@ -38,7 +38,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 const cacheFileName = "test-results.json"

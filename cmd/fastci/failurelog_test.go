@@ -11,8 +11,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // fakeRunTestsAnalyzer is a minimal analyzer.Analyzer stub whose RunTests

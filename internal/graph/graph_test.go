@@ -3,7 +3,7 @@ package graph_test
 import (
 	"testing"
 
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // Both tests simulate the same real-world event: a directory used to have

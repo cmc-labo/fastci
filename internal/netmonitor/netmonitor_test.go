@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/netmonitor"
+	"github.com/cmc-labo/fastci/internal/netmonitor"
 )
 
 func TestProxyForwardsPlainHTTPAndLogsHost(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/vitestanalyzer"
 )
 
 func sampleVitestDir(t *testing.T) string {

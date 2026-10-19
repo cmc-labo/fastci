@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // CargoBuildScripts flags dependency crates (direct or transitive) that

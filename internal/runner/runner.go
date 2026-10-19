@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // Options configures a test run.

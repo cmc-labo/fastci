@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hpscript/fastci/internal/analyzer"
-	"github.com/hpscript/fastci/internal/debug"
-	"github.com/hpscript/fastci/internal/netmonitor"
+	"github.com/cmc-labo/fastci/internal/analyzer"
+	"github.com/cmc-labo/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/netmonitor"
 )
 
 // runAndRecordWithNetworkReport wraps runAndRecord with fastci guard's

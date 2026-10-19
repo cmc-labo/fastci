@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/goanalyzer"
 )
 
 func sampleModDir(t *testing.T) string {

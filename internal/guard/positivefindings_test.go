@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hpscript/fastci/internal/guard"
+	"github.com/cmc-labo/fastci/internal/guard"
 )
 
 // These tests are the mirror image of networkfailure_test.go: they check

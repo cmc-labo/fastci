@@ -21,9 +21,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hpscript/fastci/internal/debug"
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // skipDirs are the same directories Build's own walk-pruning closure

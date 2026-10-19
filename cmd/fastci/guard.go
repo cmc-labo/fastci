@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hpscript/fastci/internal/guard"
+	"github.com/cmc-labo/fastci/internal/guard"
 )
 
 // checkerTimeout bounds a single Checker.Run call. These are ordinary

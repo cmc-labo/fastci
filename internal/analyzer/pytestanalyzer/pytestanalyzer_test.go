@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/pytestanalyzer"
 )
 
 func samplePytestDir(t *testing.T) string {

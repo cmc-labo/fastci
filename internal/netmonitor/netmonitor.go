@@ -24,7 +24,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // Proxy is a running local forward proxy. Create one with Start and stop

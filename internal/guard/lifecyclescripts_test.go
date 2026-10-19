@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/guard"
+	"github.com/cmc-labo/fastci/internal/guard"
 )
 
 func TestLifecycleScriptsDetect(t *testing.T) {

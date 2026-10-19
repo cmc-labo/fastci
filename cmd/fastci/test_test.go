@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/analyzer/goanalyzer"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // buildGraphWithFiles constructs a minimal graph where the given nodes each

@@ -60,7 +60,7 @@ You need fastci itself installed first - see
 done that yet:
 
 ```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
+go install github.com/cmc-labo/fastci/cmd/fastci@latest
 fastci --help   # confirms it's installed and on PATH
 ```
 
@@ -435,7 +435,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go install github.com/hpscript/fastci/cmd/fastci@latest
+      - run: go install github.com/cmc-labo/fastci/cmd/fastci@latest
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       # JS/TS projects: LifecycleScripts needs node_modules to exist.

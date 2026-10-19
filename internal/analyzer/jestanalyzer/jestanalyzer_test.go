@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/jestanalyzer"
 )
 
 func sampleJestDir(t *testing.T) string {

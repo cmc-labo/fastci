@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/goanalyzer"
 )
 
 func initGoRepo(t *testing.T) string {

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
 
-	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/cmc-labo/fastci/internal/gitdiff"
 )
 
 // RefineRunFilter attempts function-level impact-analysis narrowing: given

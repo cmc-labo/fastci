@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/testcache"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/testcache"
 )
 
 // fakeRemoteStore is a minimal in-memory stand-in for whatever real

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // ChangedFiles returns the list of files changed, as absolute paths.

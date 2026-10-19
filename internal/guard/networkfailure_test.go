@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hpscript/fastci/internal/guard"
+	"github.com/cmc-labo/fastci/internal/guard"
 )
 
 // deadProxyEnv points HTTP_PROXY/HTTPS_PROXY at a port nothing listens on,

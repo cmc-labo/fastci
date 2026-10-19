@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hpscript/fastci/internal/ciworkflow"
-	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/cmc-labo/fastci/internal/ciworkflow"
+	"github.com/cmc-labo/fastci/internal/gitdiff"
 )
 
 func newLocalCmd() *cobra.Command {

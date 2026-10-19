@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/ciworkflow"
+	"github.com/cmc-labo/fastci/internal/ciworkflow"
 )
 
 func writeGitLabCI(t *testing.T, repoRoot, content string) {

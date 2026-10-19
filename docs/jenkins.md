@@ -30,7 +30,7 @@ fastci itself needs a Go toolchain to install (not your project - see
 already has `go` on `PATH`, a plain shell step is all you need:
 
 ```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
+go install github.com/cmc-labo/fastci/cmd/fastci@latest
 export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
@@ -50,7 +50,7 @@ pipeline {
     stages {
         stage('Install fastci') {
             steps {
-                sh 'go install github.com/hpscript/fastci/cmd/fastci@latest'
+                sh 'go install github.com/cmc-labo/fastci/cmd/fastci@latest'
             }
         }
         stage('Test') {
@@ -80,7 +80,7 @@ The same idea, without Pipeline syntax - add an "Execute shell" build
 step:
 
 ```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
+go install github.com/cmc-labo/fastci/cmd/fastci@latest
 export PATH="$PATH:$(go env GOPATH)/bin"
 fastci test --base origin/main
 ```

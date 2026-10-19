@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // Analyzer builds a dependency graph for a project and knows how to run its

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/jsworkspace"
+	"github.com/cmc-labo/fastci/internal/analyzer/jsworkspace"
 )
 
 func writeFile(t *testing.T, path, content string) {

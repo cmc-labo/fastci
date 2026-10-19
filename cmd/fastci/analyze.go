@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hpscript/fastci/internal/anthropic"
-	"github.com/hpscript/fastci/internal/gitdiff"
+	"github.com/cmc-labo/fastci/internal/anthropic"
+	"github.com/cmc-labo/fastci/internal/gitdiff"
 )
 
 // analyzeSystemPrompt frames the model's role: a terse, actionable failure

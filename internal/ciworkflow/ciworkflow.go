@@ -22,7 +22,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // Detection is the result of inspecting a repository for its CI base

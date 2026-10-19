@@ -31,10 +31,10 @@ import (
 
 	"github.com/evanw/esbuild/pkg/api"
 
-	"github.com/hpscript/fastci/internal/analyzer/dynimport"
-	"github.com/hpscript/fastci/internal/analyzer/jsworkspace"
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/runner"
+	"github.com/cmc-labo/fastci/internal/analyzer/dynimport"
+	"github.com/cmc-labo/fastci/internal/analyzer/jsworkspace"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/runner"
 )
 
 // Analyzer is the Jest implementation of analyzer.Analyzer.

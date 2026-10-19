@@ -9,7 +9,7 @@ import (
 
 	"github.com/evanw/esbuild/pkg/api"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 //go:embed extract_vite_aliases.js

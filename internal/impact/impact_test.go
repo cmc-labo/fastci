@@ -6,14 +6,14 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer"
-	"github.com/hpscript/fastci/internal/analyzer/cargoanalyzer"
-	"github.com/hpscript/fastci/internal/analyzer/goanalyzer"
-	"github.com/hpscript/fastci/internal/analyzer/jestanalyzer"
-	"github.com/hpscript/fastci/internal/analyzer/pytestanalyzer"
-	"github.com/hpscript/fastci/internal/analyzer/vitestanalyzer"
-	"github.com/hpscript/fastci/internal/graph"
-	"github.com/hpscript/fastci/internal/impact"
+	"github.com/cmc-labo/fastci/internal/analyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/cargoanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/goanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/jestanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/pytestanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/vitestanalyzer"
+	"github.com/cmc-labo/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/impact"
 )
 
 var goAnalyzer analyzer.Analyzer = goanalyzer.New()

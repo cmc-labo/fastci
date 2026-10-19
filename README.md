@@ -56,7 +56,7 @@ test command for two lines:
 ```diff
        - uses: actions/checkout@v4
 -      - run: go test ./...
-+      - run: go install github.com/hpscript/fastci/cmd/fastci@latest
++      - run: go install github.com/cmc-labo/fastci/cmd/fastci@latest
 +      - run: fastci test --base origin/${{ github.base_ref }}
 ```
 
@@ -97,7 +97,7 @@ required even if the project you'll run it *against* is JavaScript, Python,
 or Rust; only building fastci needs a Go toolchain, not your project:
 
 ```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
+go install github.com/cmc-labo/fastci/cmd/fastci@latest
 ```
 
 This needs Go on your machine ([install Go](https://go.dev/doc/install) if
@@ -1118,7 +1118,7 @@ jobs:
       #   with:
       #     dotnet-version: "8.0.x"
 
-      - run: go install github.com/hpscript/fastci/cmd/fastci@latest
+      - run: go install github.com/cmc-labo/fastci/cmd/fastci@latest
       - run: fastci test --base origin/${{ github.base_ref }}
 ```
 

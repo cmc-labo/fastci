@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/ciworkflow"
+	"github.com/cmc-labo/fastci/internal/ciworkflow"
 )
 
 func writeWorkflow(t *testing.T, repoRoot, name, content string) {

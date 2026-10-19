@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer/cargoanalyzer"
+	"github.com/cmc-labo/fastci/internal/analyzer/cargoanalyzer"
 )
 
 func sampleCargoDir(t *testing.T) string {

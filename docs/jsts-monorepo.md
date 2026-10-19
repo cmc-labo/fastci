@@ -203,7 +203,7 @@ No upgrade, flag, or config needed - if you're already on a recent fastci,
 this is already active for any npm/yarn/pnpm workspace:
 
 ```sh
-go install github.com/hpscript/fastci/cmd/fastci@latest
+go install github.com/cmc-labo/fastci/cmd/fastci@latest
 cd your-monorepo   # the workspace root
 fastci test --dry-run -v
 ```

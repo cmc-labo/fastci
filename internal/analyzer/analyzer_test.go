@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/analyzer"
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/analyzer"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // fakeAnalyzer is a minimal analyzer.Analyzer stub for exercising

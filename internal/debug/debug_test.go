@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/debug"
+	"github.com/cmc-labo/fastci/internal/debug"
 )
 
 // captureStderr redirects os.Stderr for the duration of fn and returns

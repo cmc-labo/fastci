@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // buildOneNodeGraph is a minimal graph with one real file on disk, enough

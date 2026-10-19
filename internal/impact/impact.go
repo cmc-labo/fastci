@@ -6,8 +6,8 @@ package impact
 import (
 	"sort"
 
-	"github.com/hpscript/fastci/internal/analyzer"
-	"github.com/hpscript/fastci/internal/graph"
+	"github.com/cmc-labo/fastci/internal/analyzer"
+	"github.com/cmc-labo/fastci/internal/graph"
 )
 
 // Result is the outcome of an impact analysis.
