@@ -48,6 +48,38 @@ since fastci's fixed analysis overhead isn't yet covered by the time it
 saves. Full methodology, raw repeats, and scripts to reproduce on your
 own hardware: [Benchmarks](docs/benchmarks/README.md).
 
+## See what it selects before trusting it
+
+`--dry-run` shows which changed files fastci saw and which tests it would
+run, without running anything:
+
+```
+$ fastci test --dry-run -v
+fastci: 1 changed file(s):
+  src/leaf.ts
+fastci: selected 3/5 test target(s) (vitest, 40% skipped)
+    src/consumer.test.ts
+    src/leaf.test.ts
+    src/mid.test.ts
+fastci: dry-run, not executing tests
+```
+
+`--why` explains any single selection, or non-selection, as the
+dependency chain back to the change responsible:
+
+```
+$ fastci test --why src/consumer.test.ts
+fastci: why is "src/consumer.test.ts" selected?
+  Selected because of this dependency chain:
+    src/leaf.ts (changed)
+    -> src/mid.ts
+    -> src/consumer.ts
+    -> src/consumer.test.ts
+```
+
+Both are read-only and work in every supported language. See
+[Usage](#usage) for example output per language.
+
 ## Add it to your CI
 
 In your existing `.github/workflows/ci.yml` (on `pull_request`), swap your
@@ -68,6 +100,7 @@ for a complete workflow with per-language setup steps.
 ## Table of contents
 
 - [Quick benchmark](#quick-benchmark)
+- [See what it selects before trusting it](#see-what-it-selects-before-trusting-it)
 - [Add it to your CI](#add-it-to-your-ci)
 - [Quickstart](#quickstart)
 - [How it works](#how-it-works)
