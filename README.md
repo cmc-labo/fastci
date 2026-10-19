@@ -31,8 +31,26 @@ This is an early, incrementally-developed project. Today it covers:
 
 See [Roadmap](#roadmap) for what's next.
 
+## Quick benchmark
+
+A one-package change in a synthetic monorepo, cold caches, median of 3
+runs on a shared 2-vCPU sandbox VM:
+
+| Repo | Full suite | `fastci test` | Speedup | Tests run |
+| --- | --: | --: | --: | --: |
+| Go, 1000 packages | 119.07s | 5.57s | **21.3x** | 1 / 1001 packages |
+| Go, 200 packages | 11.91s | 2.29s | **5.2x** | 1 / 201 packages |
+| Java (Maven), 200 modules | 33.01s | 4.59s | **7.1x** | 1 / 201 modules |
+| Go, 200 packages, *shared* dependency changed (worst case) | 33.45s | 36.67s | 1.0x | 201 / 201 packages |
+
+Small repos (roughly under 10-20 packages) can be slightly *slower*,
+since fastci's fixed analysis overhead isn't yet covered by the time it
+saves. Full methodology, raw repeats, and scripts to reproduce on your
+own hardware: [Benchmarks](docs/benchmarks/README.md).
+
 ## Table of contents
 
+- [Quick benchmark](#quick-benchmark)
 - [Quickstart](#quickstart)
 - [How it works](#how-it-works)
 - [Usage](#usage)
