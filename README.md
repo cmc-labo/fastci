@@ -48,9 +48,27 @@ since fastci's fixed analysis overhead isn't yet covered by the time it
 saves. Full methodology, raw repeats, and scripts to reproduce on your
 own hardware: [Benchmarks](docs/benchmarks/README.md).
 
+## Add it to your CI
+
+In your existing `.github/workflows/ci.yml` (on `pull_request`), swap your
+test command for two lines:
+
+```diff
+       - uses: actions/checkout@v4
+-      - run: go test ./...
++      - run: go install github.com/hpscript/fastci/cmd/fastci@latest
++      - run: fastci test --base origin/${{ github.base_ref }}
+```
+
+The project type (Go, Vitest, Jest, pytest, Cargo, Maven/Gradle, .NET) is
+auto-detected, so the same two lines work in place of `npm test`,
+`pytest`, `cargo test`, and so on. See [GitHub Actions](#github-actions)
+for a complete workflow with per-language setup steps.
+
 ## Table of contents
 
 - [Quick benchmark](#quick-benchmark)
+- [Add it to your CI](#add-it-to-your-ci)
 - [Quickstart](#quickstart)
 - [How it works](#how-it-works)
 - [Usage](#usage)
