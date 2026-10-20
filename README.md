@@ -1589,6 +1589,40 @@ This tracks the phased plan in the project design doc:
   it locally; faithfully replaying a workflow's other steps (e.g. its
   `uses:` actions) is out of scope for this. This closes out every item
   originally planned for Phase 3.
+- **Phase 4 (V2.5)** — Trust and adoption. Planned, in priority order:
+  - **Track `//go:embed` inputs (Go).** Today a change to an embedded
+    file is treated as a non-Go change that affects no test package, so
+    the tests that read it are silently skipped. This is the one known
+    case where narrowing can *miss* a test, not just over-select, so it
+    comes first.
+  - **Tagged releases with prebuilt binaries** for linux/macOS/windows on
+    amd64/arm64. Today the only install path is `go install`, which needs
+    a Go toolchain even on a pure Python or JS/TS project, and there are
+    no version tags to pin to.
+  - **An official GitHub Action** (`uses: cmc-labo/fastci@v1`) that
+    installs a pinned release and picks the diff base on its own, for
+    `push` events as well as `pull_request` (where `github.base_ref` is
+    the only input today).
+  - **A job summary in CI** (`$GITHUB_STEP_SUMMARY`): changed files,
+    selected vs. skipped targets, and how to reproduce with `--why`, so a
+    reviewer can see what was skipped without opening the logs.
+  - **Run fastci on fastci's own CI**, which still runs plain
+    `go test ./...` today.
+- **Phase 5 (V3.0)** — Narrower, faster selection. Planned:
+  - **Java: build only the affected modules** (Maven `-pl <modules> -am`,
+    and Gradle's equivalent), skipping compilation as well as test
+    execution. The [Java benchmark](docs/benchmarks/java/README.md)
+    measures how much this is worth.
+  - **Honor each runner's own test-discovery config**: Vitest
+    `test.include`/`exclude`, Jest `testMatch`/`testRegex`, pytest
+    `python_files`/`python_classes`/`python_functions`, and custom Java
+    naming. All four currently fall back to the runner's defaults.
+  - **C#: read `<ProjectReference>`** from `.csproj` files to scope
+    cross-project edges, instead of relying only on namespace and `using`
+    matching.
+  - **Test sharding**: split the selected targets across a CI matrix
+    (`fastci test --shard 2/4`), balanced by each target's past run time
+    (which the test-result cache would need to start recording).
 
 Language coverage grows incrementally alongside this. Vite `resolve.alias`
 resolution, Vitest/Jest monorepo/workspace cross-package resolution,
