@@ -57,7 +57,7 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports |
-			packages.NeedDeps | packages.NeedModule,
+			packages.NeedDeps | packages.NeedModule | packages.NeedEmbedFiles,
 		Dir:   dir,
 		Tests: true,
 	}
@@ -98,6 +98,10 @@ func (*Analyzer) Build(dir string) (*graph.Graph, error) {
 			n.HasTestFiles = true
 		}
 		n.Files = append(n.Files, p.GoFiles...)
+		// Files pulled in by //go:embed are as much a part of the package
+		// as its .go files; without them, editing an embedded template or
+		// fixture would look like an ignorable non-Go change.
+		n.Files = append(n.Files, p.EmbedFiles...)
 
 		for _, imp := range p.Imports {
 			if imp.Module == nil || !imp.Module.Main || isTestBinaryMain(imp) {

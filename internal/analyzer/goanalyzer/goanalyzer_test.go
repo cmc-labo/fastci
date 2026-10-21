@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cmc-labo/fastci/internal/analyzer/goanalyzer"
+	"github.com/cmc-labo/fastci/internal/impact"
 )
 
 func sampleModDir(t *testing.T) string {
@@ -96,6 +97,33 @@ func TestTargetForFile(t *testing.T) {
 
 	if _, ok := g.TargetForFile(filepath.Join(dir, "nope.go")); ok {
 		t.Error("TargetForFile should fail for an unknown file")
+	}
+}
+
+// A file pulled in by //go:embed from a subdirectory belongs to the
+// embedding package: changing it must select that package and everything
+// importing it, not be ignored as a non-Go file.
+func TestEmbeddedFileSelectsEmbeddingPackage(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "embedmod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := goanalyzer.New()
+	g, err := a.Build(dir)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	f := filepath.Join(dir, "pkgtmpl", "templates", "greeting.txt")
+	target, ok := g.TargetForFile(f)
+	if !ok || target != "embedmod/pkgtmpl" {
+		t.Errorf("TargetForFile(%s) = %q, %v; want embedmod/pkgtmpl, true", f, target, ok)
+	}
+
+	res := impact.Compute(g, []string{f}, a)
+	want := []string{"embedmod/pkgtmpl", "embedmod/pkguser"}
+	if res.FullRun || !equal(res.Targets, want) {
+		t.Errorf("Compute targets = %v (FullRun=%v), want %v", res.Targets, res.FullRun, want)
 	}
 }
 

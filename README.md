@@ -1186,8 +1186,11 @@ and `fastci analyze`/`fastci guard` as their own stages.
   cleanly attributable to specific function bodies; see that section for
   exactly when it does and doesn't kick in.
 - Non-Go changes (docs, workflow YAML, etc.) are treated as not affecting
-  any test package. Go files that reference non-Go inputs at build time
-  (e.g. `//go:embed`) aren't tracked yet.
+  any test package, with one exception: a file pulled in by `//go:embed`
+  counts as part of the package that embeds it, so changing it selects
+  that package and everything importing it. A file embedded by more than
+  one package is attributed to only one of them, and files read at run
+  time (e.g. `os.ReadFile("testdata/...")`) aren't tracked.
 
 **Vitest**
 - Shares its esbuild-based import resolution and dynamic
@@ -1590,11 +1593,11 @@ This tracks the phased plan in the project design doc:
   `uses:` actions) is out of scope for this. This closes out every item
   originally planned for Phase 3.
 - **Phase 4 (V2.5)** — Trust and adoption. Planned, in priority order:
-  - **Track `//go:embed` inputs (Go).** Today a change to an embedded
-    file is treated as a non-Go change that affects no test package, so
-    the tests that read it are silently skipped. This is the one known
-    case where narrowing can *miss* a test, not just over-select, so it
-    comes first.
+  - **Track `//go:embed` inputs (Go).** A change to an embedded file used
+    to be treated as a non-Go change that affects no test package, so the
+    tests that read it were silently skipped. Done for the common case
+    (each embedded file selects its embedding package); still open: a
+    file embedded by more than one package.
   - **Tagged releases with prebuilt binaries** for linux/macOS/windows on
     amd64/arm64. Today the only install path is `go install`, which needs
     a Go toolchain even on a pure Python or JS/TS project, and there are
