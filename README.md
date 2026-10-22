@@ -1609,8 +1609,11 @@ This tracks the phased plan in the project design doc:
   - **A job summary in CI** (`$GITHUB_STEP_SUMMARY`): changed files,
     selected vs. skipped targets, and how to reproduce with `--why`, so a
     reviewer can see what was skipped without opening the logs.
-  - **Run fastci on fastci's own CI**, which still runs plain
-    `go test ./...` today.
+  - **Run fastci on fastci's own CI.** Done for pull requests, which are
+    tested with the fastci built from the PR itself; `main` still runs
+    plain `go test ./...` as a backstop. A PR that touches `testdata/`
+    also runs everything, because fastci's tests read those fixtures at
+    run time, where impact analysis can't see them.
 - **Phase 5 (V3.0)** — Narrower, faster selection. Planned:
   - **Java: build only the affected modules** (Maven `-pl <modules> -am`,
     and Gradle's equivalent), skipping compilation as well as test

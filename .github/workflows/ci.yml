@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -17,4 +19,20 @@ jobs:
 
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+
+      # Dogfood: on a PR, test with the fastci built from the PR itself.
+      # fastci's own tests read the non-Go fixtures under testdata/ at run
+      # time, which impact analysis can't see (see "Current limitations" in
+      # the README), so any change there falls back to the full suite.
+      - if: github.event_name == 'pull_request'
+        run: |
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- testdata/; then
+            go run ./cmd/fastci test --base origin/${{ github.base_ref }}
+          else
+            go test ./...
+          fi
+
+      # main keeps running everything, as a backstop for anything a PR's
+      # narrowed run could have missed.
+      - if: github.event_name != 'pull_request'
+        run: go test ./...
