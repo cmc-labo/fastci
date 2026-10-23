@@ -136,12 +136,13 @@ go install github.com/cmc-labo/fastci/cmd/fastci@latest
 This needs Go on your machine ([install Go](https://go.dev/doc/install) if
 you don't have it) — Go 1.21 or later is enough, since `GOTOOLCHAIN=auto`
 (the default since Go 1.21) transparently downloads whatever newer toolchain
-fastci's own `go.mod` requires.
+fastci's own `go.mod` requires. fastci runs on Linux and macOS; Windows
+isn't supported yet.
 
 Verify it installed and is on your `PATH`:
 
 ```sh
-fastci --help
+fastci --version
 ```
 
 If that prints `command not found: fastci`, `go install` put the binary in
@@ -1598,10 +1599,13 @@ This tracks the phased plan in the project design doc:
     tests that read it were silently skipped. Done for the common case
     (each embedded file selects its embedding package); still open: a
     file embedded by more than one package.
-  - **Tagged releases with prebuilt binaries** for linux/macOS/windows on
-    amd64/arm64. Today the only install path is `go install`, which needs
-    a Go toolchain even on a pure Python or JS/TS project, and there are
-    no version tags to pin to.
+  - **Tagged releases with prebuilt binaries** for Linux and macOS on
+    amd64/arm64. The build side is in place (`.goreleaser.yaml`, a
+    release workflow that runs on a pushed `v*` tag, and
+    `fastci --version`); what's left is cutting the first tag. Until
+    then the only install path is `go install`, which needs a Go
+    toolchain even on a pure Python or JS/TS project. Windows needs its
+    own port of the process-group and terminal handling first.
   - **An official GitHub Action** (`uses: cmc-labo/fastci@v1`) that
     installs a pinned release and picks the diff base on its own, for
     `push` events as well as `pull_request` (where `github.base_ref` is

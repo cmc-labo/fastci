@@ -4,3 +4,4 @@
 *.out
 target/
 .fastci-cache/
+/dist/

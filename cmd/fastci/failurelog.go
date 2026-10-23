@@ -248,12 +248,12 @@ func copyOutputAndSignal(dst io.Writer, src io.Reader, done chan struct{}) {
 // here just means the double-"\r" cosmetic quirk described above isn't
 // worth aborting the capture over).
 func disableONLCR(f *os.File) {
-	t, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
+	t, err := unix.IoctlGetTermios(int(f.Fd()), ioctlGetTermios)
 	if err != nil {
 		return
 	}
 	t.Oflag &^= unix.ONLCR
-	_ = unix.IoctlSetTermios(int(f.Fd()), unix.TCSETS, t)
+	_ = unix.IoctlSetTermios(int(f.Fd()), ioctlSetTermios, t)
 }
 
 // captureOutputPipe is captureOutput's fallback path for when stdout isn't
